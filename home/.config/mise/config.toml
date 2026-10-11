@@ -23,10 +23,6 @@ python = "3.14"
 rust = "1.99"
 uv = "0.12"
 "npm:@earendil-works/pi-coding-agent" = "latest"
-"npm:typescript" = "latest"
-"npm:prettier" = "latest"
-"npm:oxlint" = "latest"
-"npm:oxfmt" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
 
 [bootstrap.packages]
