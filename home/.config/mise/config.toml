@@ -24,7 +24,6 @@ rust = "1.99"
 uv = "0.12"
 "cargo:stylua" = { version = "latest", features = ["lua52", "lua53", "lua54", "luajit", "luau", "cfxlua"] }
 "npm:@earendil-works/pi-coding-agent" = "latest"
-"npm:@playwright/cli" = "latest"
 "npm:typescript" = "latest"
 "npm:prettier" = "latest"
 "npm:oxlint" = "latest"
