@@ -1,0 +1,62 @@
+[settings]
+color_theme = "auto"
+
+[env]
+EDITOR = "nvim"
+VISUAL = "nvim"
+CONTAINERS_MACHINE_PROVIDER = "libkrun"
+_.path = ["/opt/homebrew/bin"]
+
+[shell_alias]
+ex = "exit"
+cl = "clear"
+nv = "nvim"
+ls = "eza -l"
+la = "eza -la"
+cat = "bat"
+
+[tools]
+go = "1.27"
+node = "24"
+bun = "1.4"
+python = "3.14"
+rust = "1.99"
+uv = "0.12"
+"cargo:stylua" = { version = "latest", features = ["lua52", "lua53", "lua54", "luajit", "luau", "cfxlua"] }
+"npm:@earendil-works/pi-coding-agent" = "latest"
+"npm:@playwright/cli" = "latest"
+"npm:typescript" = "latest"
+"npm:prettier" = "latest"
+"npm:oxlint" = "latest"
+"npm:oxfmt" = "latest"
+"npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
+
+[bootstrap.macos.dock]
+autohide = true                       # Hide the Dock until the pointer reaches it
+orientation = "left"                  # Place the Dock on the left edge
+magnification = false                 # Disable icon enlargement on hover
+show_recents = false                  # Hide recent apps in the Dock
+mru_spaces = false                    # Keep Spaces in a fixed order
+apps = []                             # Remove recognized pinned apps; omit to keep them
+
+[bootstrap.macos.finder]
+preferred_view_style = "list"         # Default Finder windows to list view
+
+[bootstrap.macos.keyboard]
+automatic_capitalization = false      # Disable automatic capitalization
+automatic_spelling_correction = false # Disable automatic spelling correction
+
+[bootstrap.macos.trackpad]
+tap_to_click = true                   # Allow a trackpad tap to click
+three_finger_drag = false             # Disable three-finger dragging
+
+[bootstrap.macos.defaults."com.apple.dock"]
+tilesize = 45.0                       # Normal Dock icon size
+largesize = 16.0                      # Magnified icon size; unused while magnification is off
+
+[bootstrap.macos.defaults.NSGlobalDomain]
+AppleInterfaceStyle = "Dark"          # Use dark appearance
+
+[bootstrap.macos.defaults."com.apple.finder"]
+FXRemoveOldTrashItems = true          # Permanently remove Trash items after 30 days
+NewWindowTarget = "PfAF"              # Open new Finder windows to Recents (All My Files)

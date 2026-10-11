@@ -1,0 +1,83 @@
+# Reports and link deployment must not install missing global tools.
+[settings]
+task.run_auto_install = false
+
+# Deploy only home/; repository-only configs and skills remain unlinked.
+[dotfiles."~"]
+source = "home"
+mode = "symlink-each"
+relative = true
+
+# Deployment exclusions are independent of .gitignore.
+# Names without "/" match at any depth in home/.
+exclude = [".DS_Store", "node_modules", ".git"]
+
+# Live state can drift without source changes: always run these tasks.
+# Explicit directories also make `mise -C /path/to/dotfiles run ...` reliable.
+[tasks.preview]
+description = "Preview dotfile deployment without changing links"
+dir = "{{config_root}}"
+run = ["mise dot apply --dry-run --verbose", "mise dot diff"]
+
+[tasks.check]
+description = "Check Git whitespace and dotfile deployment state"
+dir = "{{config_root}}"
+run = [
+  "git diff --check",
+  "git status --short --untracked-files=all",
+  "mise dot diff",
+  "mise dot status --missing",
+]
+
+[tasks.deploy]
+description = "Preview, confirm, apply dotfiles, then check deployment"
+dir = "{{config_root}}"
+depends = ["preview"]
+confirm = { message = "Apply the previewed dotfile changes? Stop if there are conflicts or unexpected link changes.", default = "no" }
+raw = true
+# The task confirmation gates apply; never force conflicting targets.
+run = ["mise dot apply --yes", { task = "check" }]
+
+[tasks."macos:preview"]
+description = "Preview all declared macOS preference changes without applying"
+dir = "{{config_root}}"
+run = "mise bootstrap macos defaults apply --dry-run"
+
+[tasks."macos:status"]
+description = "Report the state of declared macOS preferences"
+dir = "{{config_root}}"
+run = "mise bootstrap macos defaults status"
+
+[tasks."macos:check"]
+description = "Check macOS preferences; fail on missing or differing values"
+dir = "{{config_root}}"
+run = "mise bootstrap macos defaults status --missing"
+
+[tasks."macos:apply"]
+description = "Preview, confirm, apply macOS preferences, then check"
+dir = "{{config_root}}"
+depends = ["macos:preview"]
+confirm = { message = "Apply ALL previewed macOS preferences? Stop if there are unrelated changes.", default = "no" }
+raw = true
+# The task confirmation gates apply; do not restart Dock or Finder automatically.
+run = ["mise bootstrap macos defaults apply --yes", { task = "macos:check" }]
+
+[tasks."bootstrap:status"]
+description = "Report the state of configured bootstrap resources"
+dir = "{{config_root}}"
+run = "mise bootstrap status"
+
+[tasks."bootstrap:plan"]
+description = "Report planned declarative bootstrap changes without applying"
+dir = "{{config_root}}"
+run = "mise bootstrap plan"
+
+[tasks."bootstrap:preview"]
+description = "Dry-run the full bootstrap workflow, including tools and hooks"
+dir = "{{config_root}}"
+run = "mise bootstrap --dry-run"
+
+[tasks."bootstrap:check"]
+description = "Report bootstrap state and fail if any configured state differs"
+dir = "{{config_root}}"
+run = "mise bootstrap status --missing"

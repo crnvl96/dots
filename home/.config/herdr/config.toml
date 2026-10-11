@@ -1,0 +1,30 @@
+onboarding = false
+
+[theme]
+name = "terminal"
+auto_switch = true
+light_name = "terminal"
+dark_name = "terminal"
+
+[ui.sound]
+enabled = false
+
+[keys]
+prefix = "cmd+b"
+
+toggle_sidebar = "prefix+e"
+split_vertical = "prefix+v"
+split_horizontal = "prefix+s"
+
+close_pane = "prefix+x"
+
+new_workspace = "prefix+n"
+
+new_tab = "prefix+c"
+switch_tab = "prefix+1..9"
+next_tab = "cmd+period"
+previous_tab = "cmd+comma"
+
+focus_agent = "cmd+1..9"
+
+
