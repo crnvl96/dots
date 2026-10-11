@@ -26,24 +26,36 @@ List tasks with `mise tasks --local`.
 
 | Operation | Inspect / preview | Apply, only when requested | Verify |
 | --- | --- | --- | --- |
-| Dotfile links | `mise run preview` | `mise run deploy` | `mise run check` |
-| macOS preferences | `mise run macos:status`, `mise run macos:preview` | `mise run macos:apply` | `mise run macos:check` |
-| Full bootstrap | `mise run bootstrap:status`, `mise run bootstrap:preview` | Separate authorization required | `mise run bootstrap:check` |
+| Full bootstrap | `mise run bootstrap:preview` | `mise run bootstrap:apply` | `mise run bootstrap:check` |
+| Homebrew entries | `mise run brew:check` | Separate workflow; not part of bootstrap | `mise run brew:check` |
 
-`deploy` and `macos:apply` preview, confirm (default: no), apply, then check.
-Stop on conflicts or unrelated changes; never bypass confirmation without
-explicit authorization and a reviewed preview.
+`bootstrap:apply` previews, confirms (default: no), applies, then checks.
+It can change links and ALL declared macOS preferences, install tools, and run
+configured hooks. Stop on conflicts or unrelated changes; never bypass
+confirmation without explicit authorization and a reviewed preview.
 
-- `deploy` changes links only. Mise can repoint symlinks without `--force`.
-- `macos:apply` applies ALL declared preferences, not just the edited key. It
-  does not install tools or restart Dock/Finder.
-- macOS and bootstrap tasks read the active `~/.config/mise/config.toml`.
+Use native targeted commands for small changes instead of full bootstrap:
+
+| Operation | Preview | Apply, only when requested | Verify |
+| --- | --- | --- | --- |
+| Dotfile links | `mise dot apply --dry-run` | `mise dot apply` | `mise dot diff`, `mise dot status --missing` |
+| macOS preferences | `mise bootstrap macos defaults apply --dry-run` | `mise bootstrap macos defaults apply` | `mise bootstrap macos defaults status --missing` |
+
+- Dotfile apply changes links only. Mise can repoint symlinks without `--force`.
+- Targeted macOS apply changes ALL declared preferences, not just the edited
+  key. It does not install tools or restart Dock/Finder.
+- macOS and bootstrap commands read the active `~/.config/mise/config.toml`.
   Verify it points to the repository source before using them.
-- Task runs do not auto-install tools. If mise is missing or config is untrusted,
-  report the blocker; do not install or trust implicitly.
-- Use targeted tasks for small changes. On mise 2026.10.2, `bootstrap:plan`
-  misses this setup; use `bootstrap:preview`. Trusted templates can execute
-  functions during inspection.
+- Task runs do not implicitly install missing tools; explicit bootstrap apply
+  can install them. If mise is missing or config is untrusted, report the
+  blocker; do not install or trust implicitly.
+- `brew:check` runs its stdlib-only script with uv; Python downloads and Homebrew
+  auto-update are disabled. Orphans and available upgrades are informational;
+  Brewfile drift fails the check. It does not install or remove packages.
+- On mise 2026.10.2, `mise bootstrap plan` misses this setup; use
+  `bootstrap:preview`. Trusted templates can execute functions during inspection.
+- Do not name a wrapper task `bootstrap`: mise invokes that name as a bootstrap
+  hook, so a wrapper calling `mise bootstrap` can recurse.
 
 ## Keep deployment safe
 
@@ -64,7 +76,9 @@ paths. For moved, excluded, or removed `home/` sources:
 
 ## Finish
 
-Run `mise run check` and `mise run preview`. For macOS changes, also run
-`mise run macos:check`; for task changes, run `mise tasks validate`.
+Run `mise run bootstrap:check` and `mise run bootstrap:preview`. For task
+changes, also run `mise tasks validate`. For Homebrew audit script changes,
+run `mise run brew:check` and its tests with
+`uv run --no-project --no-python-downloads python -B -m unittest discover -s tests -v`.
 Report changed files, checks, and pending changes. Distinguish existing drift
 from new issues. Edit-only and dry-run requests must not apply anything.
