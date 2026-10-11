@@ -29,8 +29,3 @@ run = [
   "git status --short --untracked-files=all",
   "mise bootstrap status --missing",
 ]
-
-[tasks."brew:check"]
-description = "Audit Brewfile entries, orphaned dependencies, and available upgrades (read-only)"
-dir = "{{config_root}}"
-run = "uv run --no-python-downloads --script scripts/check_brewfile.py"
