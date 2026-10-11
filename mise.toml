@@ -29,3 +29,16 @@ run = [
   "git status --short --untracked-files=all",
   "mise bootstrap status --missing",
 ]
+
+[tasks."brew:upgrade:preview"]
+description = "Preview upgrades for mise-managed Homebrew formulae"
+dir = "{{config_root}}"
+run = "mise bootstrap packages upgrade --manager brew --dry-run"
+
+[tasks."brew:upgrade"]
+description = "Preview, confirm, then upgrade mise-managed Homebrew formulae"
+dir = "{{config_root}}"
+depends = ["brew:upgrade:preview"]
+confirm = { message = "Upgrade the previewed mise-managed Homebrew formulae?", default = "no" }
+raw = true
+run = "mise bootstrap packages upgrade --manager brew --yes"

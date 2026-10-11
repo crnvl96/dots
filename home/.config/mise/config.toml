@@ -30,6 +30,19 @@ uv = "0.12"
 "npm:oxfmt" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
 
+[bootstrap.packages]
+"brew:bat" = "latest"
+"brew:eza" = "latest"
+"brew:fd" = "latest"
+"brew:fzf" = "latest"
+"brew:gh" = "latest"
+"brew:git" = "latest"
+"brew:lua-language-server" = "latest"
+"brew:neovim" = "latest"
+"brew:ripgrep" = "latest"
+"brew:tree" = "latest"
+"brew:tree-sitter-cli" = "latest"
+
 [bootstrap.macos.dock]
 autohide = true                       # Hide the Dock until the pointer reaches it
 orientation = "left"                  # Place the Dock on the left edge
