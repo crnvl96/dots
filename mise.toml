@@ -9,36 +9,50 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks."bootstrap:preview"]
-description = "Dry-run the full bootstrap workflow, including tools and hooks"
+description = "Preview bootstrap across the main, Neovim, and Pi config scopes"
 dir = "{{config_root}}"
-run = "mise bootstrap --dry-run"
+# Preview source configs so this also works before their target links exist.
+run = [
+  "mise bootstrap --dry-run",
+  "mise -C home/.config/nvim bootstrap --dry-run",
+  "mise -C home/.pi bootstrap --dry-run",
+]
 
 [tasks."bootstrap:apply"]
-description = "Preview, confirm, bootstrap, then verify configured state"
+description = "Preview, confirm, bootstrap all config scopes, then verify state"
 dir = "{{config_root}}"
 depends = ["bootstrap:preview"]
 confirm = { message = "Apply the previewed bootstrap changes (dotfiles, macOS preferences, tools, and configured hooks)? Stop if there are conflicts or unexpected changes.", default = "no" }
 raw = true
-run = ["mise bootstrap --yes", { task = "bootstrap:check" }]
+# Apply the main scope first to deploy the Neovim and Pi config links.
+run = [
+  "mise bootstrap --yes",
+  'mise -C "$HOME/.config/nvim" bootstrap --yes',
+  'mise -C "$HOME/.pi" bootstrap --yes',
+  { task = "bootstrap:check" },
+]
 
 [tasks."bootstrap:check"]
-description = "Check Git whitespace and fail if configured bootstrap state differs"
+description = "Check Git whitespace and verify bootstrap state across all config scopes"
 dir = "{{config_root}}"
 run = [
   "git diff --check",
   "git status --short --untracked-files=all",
   "mise bootstrap status --missing",
+  'mise -C "$HOME/.config/nvim" bootstrap status --missing',
+  'mise -C "$HOME/.pi" bootstrap status --missing',
 ]
 
 [tasks."brew:upgrade:preview"]
-description = "Preview upgrades for mise-managed Homebrew formulae"
+description = "Preview upgrades for global and Neovim Homebrew formulae"
 dir = "{{config_root}}"
-run = "mise bootstrap packages upgrade --manager brew --dry-run"
+# The Neovim scope inherits global packages; Pi declares no extra Brew packages.
+run = "mise -C home/.config/nvim bootstrap packages upgrade --manager brew --dry-run"
 
 [tasks."brew:upgrade"]
-description = "Preview, confirm, then upgrade mise-managed Homebrew formulae"
+description = "Preview, confirm, then upgrade global and Neovim Homebrew formulae"
 dir = "{{config_root}}"
 depends = ["brew:upgrade:preview"]
 confirm = { message = "Upgrade the previewed mise-managed Homebrew formulae?", default = "no" }
 raw = true
-run = "mise bootstrap packages upgrade --manager brew --yes"
+run = "mise -C home/.config/nvim bootstrap packages upgrade --manager brew --yes"
