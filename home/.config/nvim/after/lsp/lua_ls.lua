@@ -1,5 +1,4 @@
 return {
-  -- cmd = { 'mise', 'exec', 'lua-language-server@3.19', '--', 'lua-language-server' },
   settings = {
     Lua = {
       runtime = {
