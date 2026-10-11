@@ -1,19 +1,13 @@
-# Reports and link deployment must not install missing global tools.
 [settings]
 task.run_auto_install = false
 
-# Deploy only home/; repository-only configs and skills remain unlinked.
 [dotfiles."~"]
 source = "home"
 mode = "symlink-each"
 relative = true
 
-# Deployment exclusions are independent of .gitignore.
-# Names without "/" match at any depth in home/.
 exclude = [".DS_Store", "node_modules", ".git"]
 
-# Live state can drift without source changes: always run these tasks.
-# Explicit directories also make `mise -C /path/to/dotfiles run ...` reliable.
 [tasks."bootstrap:preview"]
 description = "Dry-run the full bootstrap workflow, including tools and hooks"
 dir = "{{config_root}}"
@@ -25,8 +19,6 @@ dir = "{{config_root}}"
 depends = ["bootstrap:preview"]
 confirm = { message = "Apply the previewed bootstrap changes (dotfiles, macOS preferences, tools, and configured hooks)? Stop if there are conflicts or unexpected changes.", default = "no" }
 raw = true
-# The task confirmation gates apply; never force conflicting targets.
-# Do not name this task `bootstrap`: mise runs that name as a bootstrap hook.
 run = ["mise bootstrap --yes", { task = "bootstrap:check" }]
 
 [tasks."bootstrap:check"]
