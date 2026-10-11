@@ -1,3 +1,8 @@
 [bootstrap.packages]
 "brew:lua-language-server" = "latest"
 "brew:stylua" = "latest"
+
+[tasks.format]
+description = "Format the Neovim Lua configuration with StyLua"
+dir = "{{config_root}}"
+run = "stylua --verify ."

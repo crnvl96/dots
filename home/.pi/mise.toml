@@ -1,0 +1,19 @@
+[tools]
+"npm:oxfmt" = "latest"
+"npm:oxlint" = "latest"
+"npm:typescript" = "latest"
+
+[tasks.format]
+description = "Format Pi extensions and managed JSON configuration"
+dir = "{{config_root}}"
+run = "oxfmt --write agent/extensions/*.ts agent/keybindings.json agent/mcp.json agent/settings.json"
+
+[tasks.lint]
+description = "Lint Pi extensions"
+dir = "{{config_root}}"
+run = "oxlint --deny-warnings agent/extensions/*.ts"
+
+[tasks.typecheck]
+description = "Typecheck Pi extensions without emitting files"
+dir = "{{config_root}}"
+run = "tsc --noEmit --strict --skipLibCheck --target esnext --module preserve --moduleResolution bundler agent/extensions/*.ts"
