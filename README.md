@@ -19,6 +19,8 @@ mise run <task>                            # Run any task below by its full name
 │       ├── bootstrap:macos                # Preview and apply macOS defaults and LaunchAgents
 │       ├── bootstrap:tools                # Preview and install globally declared tools
 │       └── bootstrap:check                # Check Git whitespace, working tree, and bootstrap state
-└── brew:upgrade                           # Preview and upgrade declared Homebrew packages
-    └── brew:upgrade:preview               # Preview Homebrew package upgrades without applying them
+├── brew:upgrade                           # Preview and upgrade declared Homebrew packages
+│   └── brew:upgrade:preview               # Preview Homebrew package upgrades without applying them
+└── tools:upgrade                          # Preview and upgrade configured mise tools within their version constraints
+    └── tools:upgrade:preview              # Preview mise tool upgrades without applying them
 ```

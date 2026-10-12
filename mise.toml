@@ -115,3 +115,14 @@ description = "Preview and upgrade globally declared Brew packages only"
 dir = "{{config_root}}"
 depends = ["brew:upgrade:preview"]
 run = "mise bootstrap packages upgrade --manager brew --yes"
+
+[tasks."tools:upgrade:preview"]
+description = "Preview upgrades for configured mise tools within their version constraints"
+dir = "{{config_root}}"
+run = "mise upgrade --dry-run"
+
+[tasks."tools:upgrade"]
+description = "Preview and upgrade configured mise tools within their version constraints"
+dir = "{{config_root}}"
+depends = ["tools:upgrade:preview"]
+run = "mise upgrade --yes"
