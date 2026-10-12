@@ -19,19 +19,19 @@ Requirements: `ffmpeg` on `PATH` with `libx264` (mp4) and `libvpx` (webm). `agen
 
 **Before running the examples, the agent must obtain the user's authorized environment and set the variables below in the shell that runs both scripts.** Use an existing secure runtime environment or an approved secrets manager. If a value or authorized source is missing, ask the user; never guess credentials or copy real values into these examples.
 
-| Variable | Required by | Runtime value |
-|---|---|---|
-| `DEMO_BASE_URL` | Both | Authorized HTTP(S) app origin, without credentials, path, query or fragment |
-| `DEMO_EMAIL` | Preparation | Authorized demo persona's email |
-| `DEMO_PASSWORD` | Preparation | Password supplied securely, never hardcoded |
-| `DEMO_START_PATH` | Preparation | App-relative starting route, beginning with a single `/` |
-| `DEMO_START_TEXT` | Preparation | Visible marker that confirms the start page loaded |
-| `DEMO_TARIFF_NAME` | Recording | Exact visible name of the authorized demo tariff |
-| `DEMO_CHARGE_NAME` | Recording | Exact visible charge list-item name, including any displayed prefix |
-| `DEMO_VERSION_ONE_LABEL` | Recording | Exact visible label of the first version option |
-| `DEMO_VERSION_TWO_LABEL` | Recording | Exact visible label of the second version option |
-| `DEMO_THEME_STORAGE_KEY` | Optional, both | App's localStorage theme key; omit to disable this override |
-| `DEMO_THEME_PROFILE_FIELD` | Optional, both | JSON theme field in fetch responses; omit to disable this override |
+| Variable                   | Required by    | Runtime value                                                               |
+| -------------------------- | -------------- | --------------------------------------------------------------------------- |
+| `DEMO_BASE_URL`            | Both           | Authorized HTTP(S) app origin, without credentials, path, query or fragment |
+| `DEMO_EMAIL`               | Preparation    | Authorized demo persona's email                                             |
+| `DEMO_PASSWORD`            | Preparation    | Password supplied securely, never hardcoded                                 |
+| `DEMO_START_PATH`          | Preparation    | App-relative starting route, beginning with a single `/`                    |
+| `DEMO_START_TEXT`          | Preparation    | Visible marker that confirms the start page loaded                          |
+| `DEMO_TARIFF_NAME`         | Recording      | Exact visible name of the authorized demo tariff                            |
+| `DEMO_CHARGE_NAME`         | Recording      | Exact visible charge list-item name, including any displayed prefix         |
+| `DEMO_VERSION_ONE_LABEL`   | Recording      | Exact visible label of the first version option                             |
+| `DEMO_VERSION_TWO_LABEL`   | Recording      | Exact visible label of the second version option                            |
+| `DEMO_THEME_STORAGE_KEY`   | Optional, both | App's localStorage theme key; omit to disable this override                 |
+| `DEMO_THEME_PROFILE_FIELD` | Optional, both | JSON theme field in fetch responses; omit to disable this override          |
 
 - Export required values only at runtime. Do not put secrets, real emails, internal domains, or identifying record names in tracked files, command examples, commit messages or chat/tool output. Never run with shell tracing (`set -x`). Avoid putting literal secrets in shell history or tool calls; refer to an already-provided environment variable or approved secret injection instead.
 - `runtime.sh` creates a mode-600 temporary init script containing only the origin and optional theme keys, because browser JavaScript cannot read shell environment variables. Both callers remove that temporary file on exit. Credentials are never included in it.
@@ -52,11 +52,11 @@ Requirements: `ffmpeg` on `PATH` with `libx264` (mp4) and `libvpx` (webm). `agen
 
 ## Results so far
 
-| Attempt | Recipe | Raw → final | Outcome |
-|---|---|---|---|
-| v0 | Ad-hoc commands, `record start --cursor`, mouse commands | ~130 s | Bad. First take was 142 s of a single frozen frame; some frames mid-transition; daemon hangs |
-| v1 | One script, fresh tab, forced repaints, freezedetect trim | 22.2 → 15.5 s | Good on the first take, but too short (~2 s per step) and a white flash from a full page load |
-| v2 | v1 + dark mode, `cursor.js` macOS pointer and click ring, `click --human`, ~4 s per step, in-app navigation only | 39.6 → 34.1 s | Good on the first take. Dark mode, smooth pointer, clear clicks |
+| Attempt | Recipe                                                                                                           | Raw → final   | Outcome                                                                                       |
+| ------- | ---------------------------------------------------------------------------------------------------------------- | ------------- | --------------------------------------------------------------------------------------------- |
+| v0      | Ad-hoc commands, `record start --cursor`, mouse commands                                                         | ~130 s        | Bad. First take was 142 s of a single frozen frame; some frames mid-transition; daemon hangs  |
+| v1      | One script, fresh tab, forced repaints, freezedetect trim                                                        | 22.2 → 15.5 s | Good on the first take, but too short (~2 s per step) and a white flash from a full page load |
+| v2      | v1 + dark mode, `cursor.js` macOS pointer and click ring, `click --human`, ~4 s per step, in-app navigation only | 39.6 → 34.1 s | Good on the first take. Dark mode, smooth pointer, clear clicks                               |
 
 ## Recipe (what worked in v2)
 

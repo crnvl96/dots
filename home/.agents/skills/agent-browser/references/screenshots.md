@@ -6,11 +6,11 @@ These are notes from taking screenshots of a web app to verify UI changes and sh
 
 Before running commands, obtain the user's authorized runtime configuration and securely export these variables in the shell running the screenshot task:
 
-| Variable | Runtime value |
-|---|---|
-| `DEMO_BASE_URL` | Authorized HTTP(S) app origin, without credentials, path, query or fragment |
-| `DEMO_START_PATH` | App-relative route to capture, beginning with a single `/` |
-| `DEMO_START_TEXT` | Visible marker confirming that the intended page loaded |
+| Variable          | Runtime value                                                               |
+| ----------------- | --------------------------------------------------------------------------- |
+| `DEMO_BASE_URL`   | Authorized HTTP(S) app origin, without credentials, path, query or fragment |
+| `DEMO_START_PATH` | App-relative route to capture, beginning with a single `/`                  |
+| `DEMO_START_TEXT` | Visible marker confirming that the intended page loaded                     |
 
 Use an existing secure environment or approved secrets manager. Ask for missing values or an authorized source; never guess credentials. If login is required, obtain the authorized persona and credentials the same way, and adapt the login workflow before waiting for the page marker. Do not hardcode or log sensitive values, put literal secrets in shell history or tool calls, or enable shell tracing (`set -x`). Unset runtime configuration and credentials when finished.
 

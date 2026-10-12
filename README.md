@@ -18,9 +18,11 @@ Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run 
 
 ```terminal
 mise run <task>                            # Run any task below by its full name
-├── format                                 # Format Neovim and Pi configurations
+├── format                                 # Format Neovim, Pi, and repository Markdown
 │   ├── nvim:format                        # Format Neovim Lua using .stylua.toml
-│   └── pi:format                          # Format Pi extensions and JSON using .oxfmtrc.json
+│   ├── pi:format                          # Format Pi extensions and JSON using .oxfmtrc.json
+│   └── docs:format                        # Format all Markdown, including hidden directories, using .oxfmtrc.json
+├── docs:format:check                      # Check Markdown formatting without writing files
 ├── lint                                   # Lint Pi extensions
 │   └── pi:lint                            # Lint extensions using .oxlintrc.json; reject warnings
 ├── typecheck                              # Typecheck Pi extensions
@@ -77,11 +79,14 @@ mise run typecheck
 
 Use the same dependency-sync step after changing the configured Node major. Commit the resulting `package.json` and `package-lock.json` changes together.
 
-### Format and validate configuration changes
+### Format and validate configuration and documentation changes
 
 ```sh
-# Format Neovim and Pi configurations
+# Format Neovim and Pi configurations and all repository Markdown
 mise run format
+
+# Check only Markdown formatting without changing files
+mise run docs:format:check
 
 # Check Pi extensions for lint errors and warnings
 mise run lint

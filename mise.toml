@@ -9,8 +9,8 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format the Neovim and Pi configurations"
-depends = ["nvim:format", "pi:format"]
+description = "Format Neovim and Pi configurations and repository Markdown"
+depends = ["nvim:format", "pi:format", "docs:format"]
 
 [tasks.lint]
 description = "Lint Pi extensions"
@@ -40,6 +40,16 @@ description = "Typecheck Pi extensions without emitting files"
 dir = "{{config_root}}"
 depends = ["pi:deps"]
 run = "tsc --project tsconfig.json"
+
+[tasks."docs:format"]
+description = "Format all repository Markdown, including hidden directories, with Oxfmt"
+dir = "{{config_root}}"
+run = "oxfmt --write '**/*.md'"
+
+[tasks."docs:format:check"]
+description = "Check repository Markdown formatting without writing files"
+dir = "{{config_root}}"
+run = "oxfmt --check '**/*.md'"
 
 [tasks."docs:serve"]
 description = "Serve docs Markdown with an index and navigation on localhost"
