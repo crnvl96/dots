@@ -4,8 +4,6 @@ color_theme = "auto"
 [env]
 EDITOR = "nvim"
 VISUAL = "nvim"
-CONTAINERS_MACHINE_PROVIDER = "libkrun"
-_.path = ["/opt/homebrew/bin"]
 
 [shell_alias]
 ex = "exit"
