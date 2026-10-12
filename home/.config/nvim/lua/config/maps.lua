@@ -5,8 +5,6 @@ local function copy_file_location()
   local is_visual = mode == 'v' or mode == 'V' or mode == '\22'
   local start_line, end_line = vim.fn.line('.'), vim.fn.line('.')
   if is_visual then
-    -- '< and '> describe the last completed selection, not the active one.
-    -- getregionpos also respects exclusive selections ending at column one.
     local region = vim.fn.getregionpos(vim.fn.getpos('v'), vim.fn.getpos('.'), { type = mode })
     start_line, end_line = region[1][1][2], region[#region][2][2]
   end
@@ -63,7 +61,6 @@ vim.keymap.set({ 'n', 'v', 'i', 'o' }, '<Esc>', '<Esc><Cmd>noh<CR>', { desc = 'C
 
 vim.keymap.set('x', 'p', [["_dP]], { desc = 'Paste in visual mode' })
 
--- Emacs-style command-line navigation and editing.
 vim.keymap.set('c', '<C-a>', '<Home>', { desc = 'Move to start of command line' })
 vim.keymap.set('c', '<C-e>', '<End>', { desc = 'Move to end of command line' })
 vim.keymap.set('c', '<C-f>', '<Right>', { desc = 'Move forward one character' })

@@ -21,7 +21,6 @@ require('mini.surround').setup({
   },
 })
 
--- require('mini.snippets').start_lsp_server()
 require('mini.snippets').setup({
   snippets = {
     require('mini.snippets').gen_loader.from_file('~/.config/nvim/snippets/global.json'),
