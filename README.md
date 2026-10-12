@@ -18,11 +18,13 @@ Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run 
 
 ```terminal
 mise run <task>                            # Run any task below by its full name
-├── format                                 # Format Neovim, Pi, Markdown, and JavaScript scripts
+├── format                                 # Format Neovim Lua, Pi extensions, JSON, Markdown, and JavaScript scripts
 │   ├── nvim:format                        # Format Neovim Lua using .stylua.toml
-│   ├── pi:format                          # Format Pi extensions and JSON using .oxfmtrc.json
+│   ├── pi:format                          # Format Pi TypeScript extensions using .oxfmtrc.json
+│   ├── json:format                        # Format all non-lockfile JSON, including hidden directories, using .oxfmtrc.json
 │   ├── docs:format                        # Format all Markdown, including hidden directories, using .oxfmtrc.json
 │   └── scripts:format                     # Format scripts/**/*.mjs using .oxfmtrc.json
+├── json:format:check                      # Check non-lockfile JSON formatting without writing files
 ├── docs:format:check                      # Check Markdown formatting without writing files
 ├── scripts:format:check                   # Check JavaScript script formatting without writing files
 ├── lint                                   # Lint Pi extensions and JavaScript scripts
@@ -89,10 +91,11 @@ Use the same dependency-sync step after changing the configured Node major. Comm
 ### Format and validate configuration, documentation, and script changes
 
 ```sh
-# Format Neovim and Pi configurations, all Markdown, and JavaScript scripts
+# Format Neovim Lua, Pi extensions, non-lockfile JSON, Markdown, and JavaScript scripts
 mise run format
 
-# Check Markdown and JavaScript formatting without changing files
+# Check JSON, Markdown, and JavaScript formatting without changing files
+mise run json:format:check
 mise run docs:format:check
 mise run scripts:format:check
 
@@ -105,3 +108,5 @@ mise run typecheck
 # Run dependency-sync and docs-server behavioral tests
 mise run scripts:test
 ```
+
+JSON formatting includes root and hidden-directory configuration files, but excludes the generated `package-lock.json` and `home/.config/nvim/nvim-pack-lock.json` to preserve their generator-owned layout. JSON schema validation is not yet implemented.

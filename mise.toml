@@ -9,8 +9,8 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format Neovim and Pi configurations, repository Markdown, and JavaScript scripts"
-depends = ["nvim:format", "pi:format", "docs:format", "scripts:format"]
+description = "Format Neovim Lua, Pi extensions, repository JSON and Markdown, and JavaScript scripts"
+depends = ["nvim:format", "pi:format", "json:format", "docs:format", "scripts:format"]
 
 [tasks.lint]
 description = "Lint Pi extensions and JavaScript scripts"
@@ -26,9 +26,19 @@ dir = "{{config_root}}"
 run = "stylua --verify --config-path .stylua.toml home/.config/nvim"
 
 [tasks."pi:format"]
-description = "Format Pi extensions and managed JSON configuration"
+description = "Format Pi TypeScript extensions"
 dir = "{{config_root}}"
-run = "oxfmt --write 'home/.pi/agent/extensions/*.ts' 'home/.pi/agent/*.json'"
+run = "oxfmt --write 'home/.pi/agent/extensions/*.ts'"
+
+[tasks."json:format"]
+description = "Format repository JSON, including hidden directories, except generated lockfiles"
+dir = "{{config_root}}"
+run = "oxfmt --write '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-pack-lock.json'"
+
+[tasks."json:format:check"]
+description = "Check repository JSON formatting without writing files; exclude generated lockfiles"
+dir = "{{config_root}}"
+run = "oxfmt --check '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-pack-lock.json'"
 
 [tasks."pi:lint"]
 description = "Lint Pi extensions"
