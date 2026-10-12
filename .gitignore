@@ -1,2 +1,7 @@
 node_modules/
 .DS_Store
+
+# Browser demo runtime configuration and potentially sensitive generated artifacts.
+home/.agents/skills/agent-browser/examples/**/.env*
+home/.agents/skills/agent-browser/examples/**/.tmp/
+home/.agents/skills/agent-browser/examples/**/v2-*
