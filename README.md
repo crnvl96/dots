@@ -2,18 +2,6 @@
 
 Personal dotfiles, managed by [mise](https://mise.jdx.dev/).
 
-## Docs
-
-Keep browsable documentation in [`docs/`](docs/), starting with the [verification roadmap](docs/verification-roadmap.md). Markdown files can be placed in subfolders; no index file or registration is needed.
-
-```sh
-mise run docs:serve
-```
-
-Open <http://127.0.0.1:8787/> for an index grouped by folder. Each document has index/previous/next links and heading anchors; relative Markdown links work normally. Refresh after edits to pick up changed or newly added files. Only `.md` files under `docs/` are served; local image assets are not. Raw HTML is displayed as text. Stop with Ctrl+C.
-
-Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run the server tests. Both tasks install locked development dependencies first. The server is [`scripts/server.mjs`](scripts/server.mjs), using Node's HTTP server and Markdown-it; there is no frontend build.
-
 ## Task list
 
 ```terminal
@@ -42,10 +30,6 @@ mise run <task>                            # Run any task below by its full name
 │   └── scripts:typecheck                  # Check .mjs with strict checkJs using tsconfig.scripts.json
 │       └── pi:deps                        # Install development dependencies from the lockfile
 ├── scripts:test                           # Run all scripts/**/*.test.mjs with Node's test runner
-│   └── pi:deps                            # Install development dependencies from the lockfile
-├── docs:serve                             # Browse docs Markdown on localhost (default port 8787)
-│   └── pi:deps                            # Install development dependencies from the lockfile
-├── docs:test                              # Test docs rendering, navigation, and file access
 │   └── pi:deps                            # Install development dependencies from the lockfile
 ├── bootstrap:preview                      # Preview all currently loaded bootstrap configuration
 ├── bootstrap:apply                        # Bootstrap every scope, starting with dotfiles
@@ -116,13 +100,13 @@ mise run shell:syntax
 # Install locked dev dependencies and check extension and JavaScript types
 mise run typecheck
 
-# Run dependency-sync and docs-server behavioral tests
+# Run dependency-sync behavioral tests
 mise run scripts:test
 ```
 
-JSON formatting includes root and hidden-directory configuration files, but excludes the generated `package-lock.json` and `home/.config/nvim/nvim-pack-lock.json` to preserve their generator-owned layout. JSON schema validation is not yet implemented.
+JSON formatting includes root and hidden-directory configuration files, but excludes the generated `package-lock.json` and `home/.config/nvim/nvim-pack-lock.json` to preserve their generator-owned layout. JSON schema validation is not configured.
 
-TOML formatting covers `mise.toml`, `.stylua.toml`, and `home/.config/mise/config.toml`, as well as future non-ignored TOML files. It does not run bootstrap or install tools. Dedicated TOML syntax/duplicate-key and schema validation remain planned.
+TOML formatting covers `mise.toml`, `.stylua.toml`, and `home/.config/mise/config.toml`, as well as future non-ignored TOML files. It does not run bootstrap or install tools. Dedicated TOML syntax/duplicate-key and schema validation are not configured.
 
 StyLua and LuaLS (`lua-language-server`) are declared Homebrew packages, not mise tools. Use `bootstrap:brew` to install them and `brew:upgrade` to upgrade them; `bootstrap:tools` and `tools:upgrade` do not manage them.
 

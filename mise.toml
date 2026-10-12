@@ -118,18 +118,6 @@ description = "Check repository Markdown formatting without writing files"
 dir = "{{config_root}}"
 run = "oxfmt --check '**/*.md'"
 
-[tasks."docs:serve"]
-description = "Serve docs Markdown with an index and navigation on localhost"
-dir = "{{config_root}}"
-depends = ["pi:deps"]
-run = "node scripts/server.mjs"
-
-[tasks."docs:test"]
-description = "Test the Markdown docs server"
-dir = "{{config_root}}"
-depends = ["pi:deps"]
-run = "node --test scripts/server.test.mjs"
-
 [tasks."pi:deps"]
 description = "Install locked repository development dependencies"
 dir = "{{config_root}}"
