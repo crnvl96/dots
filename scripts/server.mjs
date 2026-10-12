@@ -7,6 +7,7 @@ import MarkdownIt from 'markdown-it';
 const DOCS = fileURLToPath(new URL('../docs/', import.meta.url));
 const markdown = new MarkdownIt({ html: false });
 const escape = markdown.utils.escapeHtml;
+/** @param {string} path */
 const href = (path) => `/${path.split('/').map(encodeURIComponent).join('/')}`;
 
 // Give headings stable anchors, including distinct IDs for repeated headings.
@@ -18,14 +19,19 @@ markdown.renderer.rules.heading_open = (tokens, index, options, env, renderer) =
       .replace(/[^\p{L}\p{N}\s-]/gu, '')
       .trim()
       .replace(/\s+/g, '-') || 'section';
-  env.ids ??= new Set();
+  env ??= {};
+  const ids = env.ids instanceof Set ? env.ids : (env.ids = new Set());
   let id = slug;
-  for (let count = 1; env.ids.has(id); count++) id = `${slug}-${count}`;
-  env.ids.add(id);
+  for (let count = 1; ids.has(id); count++) id = `${slug}-${count}`;
+  ids.add(id);
   tokens[index].attrSet('id', id);
   return renderer.renderToken(tokens, index, options);
 };
 
+/**
+ * @param {string} root
+ * @returns {string[]}
+ */
 function documents(root, directory = '') {
   return readdirSync(join(root, directory), { withFileTypes: true })
     .flatMap((entry) => {
@@ -37,6 +43,10 @@ function documents(root, directory = '') {
     .sort();
 }
 
+/**
+ * @param {string} title
+ * @param {string} body
+ */
 function layout(title, body) {
   return `<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><title>${escape(title)}</title>
@@ -49,12 +59,15 @@ th, td { border: 1px solid #aaa; padding: .5rem; text-align: left; vertical-alig
 </style></head><body>${body}</body></html>`;
 }
 
+/** @param {string[]} files */
 function indexPage(files) {
+  /** @type {Map<string, string[]>} */
   const groups = new Map();
   for (const file of files) {
     const folder = dirname(file);
-    if (!groups.has(folder)) groups.set(folder, []);
-    groups.get(folder).push(file);
+    const entries = groups.get(folder) ?? [];
+    entries.push(file);
+    groups.set(folder, entries);
   }
   const sections = [...groups]
     .map(
@@ -70,11 +83,20 @@ function indexPage(files) {
   return layout('Docs', `<h1>Docs</h1>${sections || '<p>No Markdown documents yet.</p>'}`);
 }
 
+/**
+ * @param {string} root
+ * @param {string} path
+ */
 function inside(root, path) {
   const remainder = relative(root, path);
   return remainder !== '..' && !remainder.startsWith(`..${sep}`) && !isAbsolute(remainder);
 }
 
+/**
+ * @param {import('node:http').ServerResponse} response
+ * @param {number} status
+ * @param {string} body
+ */
 function send(response, status, body, type = 'text/html; charset=utf-8') {
   response.writeHead(status, {
     'Content-Type': type,
@@ -96,6 +118,7 @@ export function createDocsServer(directory = DOCS) {
     }
     let pathname;
     try {
+      if (!request.url) throw new Error('Missing URL');
       pathname = decodeURIComponent(request.url.split('?')[0]);
       if (!pathname.startsWith('/') || pathname.includes('\0')) throw new Error('Invalid path');
     } catch {
@@ -126,7 +149,7 @@ export function createDocsServer(directory = DOCS) {
         layout(file, `<nav>${navigation}</nav><p><small>${escape(file)}</small></p><main>${body}</main>`),
       );
     } catch (error) {
-      const status = error.code === 'ENOENT' ? 404 : 500;
+      const status = error instanceof Error && 'code' in error && error.code === 'ENOENT' ? 404 : 500;
       if (status === 500) console.error(error);
       return send(
         response,
@@ -162,7 +185,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     main();
   } catch (error) {
-    console.error(`Docs server failed: ${error.message}`);
+    console.error(`Docs server failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }
 }

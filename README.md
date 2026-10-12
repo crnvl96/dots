@@ -18,16 +18,23 @@ Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run 
 
 ```terminal
 mise run <task>                            # Run any task below by its full name
-├── format                                 # Format Neovim, Pi, and repository Markdown
+├── format                                 # Format Neovim, Pi, Markdown, and JavaScript scripts
 │   ├── nvim:format                        # Format Neovim Lua using .stylua.toml
 │   ├── pi:format                          # Format Pi extensions and JSON using .oxfmtrc.json
-│   └── docs:format                        # Format all Markdown, including hidden directories, using .oxfmtrc.json
+│   ├── docs:format                        # Format all Markdown, including hidden directories, using .oxfmtrc.json
+│   └── scripts:format                     # Format scripts/**/*.mjs using .oxfmtrc.json
 ├── docs:format:check                      # Check Markdown formatting without writing files
-├── lint                                   # Lint Pi extensions
-│   └── pi:lint                            # Lint extensions using .oxlintrc.json; reject warnings
-├── typecheck                              # Typecheck Pi extensions
-│   └── pi:typecheck                       # Install dependencies, then typecheck using tsconfig.json
+├── scripts:format:check                   # Check JavaScript script formatting without writing files
+├── lint                                   # Lint Pi extensions and JavaScript scripts
+│   ├── pi:lint                            # Lint extensions using .oxlintrc.json; reject warnings
+│   └── scripts:lint                       # Lint scripts using .oxlintrc.json; reject warnings
+├── typecheck                              # Typecheck Pi extensions and JavaScript scripts
+│   ├── pi:typecheck                       # Install dependencies, then typecheck using tsconfig.json
+│   │   └── pi:deps                        # Install development dependencies from the lockfile
+│   └── scripts:typecheck                  # Check .mjs with strict checkJs using tsconfig.scripts.json
 │       └── pi:deps                        # Install development dependencies from the lockfile
+├── scripts:test                           # Run all scripts/**/*.test.mjs with Node's test runner
+│   └── pi:deps                            # Install development dependencies from the lockfile
 ├── docs:serve                             # Browse docs Markdown on localhost (default port 8787)
 │   └── pi:deps                            # Install development dependencies from the lockfile
 ├── docs:test                              # Test docs rendering, navigation, and file access
@@ -73,24 +80,28 @@ mise upgrade npm:@earendil-works/pi-coding-agent --yes
 # Sync dev dependencies with installed Pi, its actual TypeBox version, and active Node
 mise run pi:deps:upgrade
 
-# Verify extension compatibility with the updated dependencies
+# Verify extension and script compatibility with the updated dependencies
 mise run typecheck
 ```
 
 Use the same dependency-sync step after changing the configured Node major. Commit the resulting `package.json` and `package-lock.json` changes together.
 
-### Format and validate configuration and documentation changes
+### Format and validate configuration, documentation, and script changes
 
 ```sh
-# Format Neovim and Pi configurations and all repository Markdown
+# Format Neovim and Pi configurations, all Markdown, and JavaScript scripts
 mise run format
 
-# Check only Markdown formatting without changing files
+# Check Markdown and JavaScript formatting without changing files
 mise run docs:format:check
+mise run scripts:format:check
 
-# Check Pi extensions for lint errors and warnings
+# Check Pi extensions and JavaScript scripts for lint errors and warnings
 mise run lint
 
-# Install locked dev dependencies and check extension types
+# Install locked dev dependencies and check extension and JavaScript types
 mise run typecheck
+
+# Run dependency-sync and docs-server behavioral tests
+mise run scripts:test
 ```

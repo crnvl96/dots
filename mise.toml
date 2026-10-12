@@ -9,16 +9,16 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format Neovim and Pi configurations and repository Markdown"
-depends = ["nvim:format", "pi:format", "docs:format"]
+description = "Format Neovim and Pi configurations, repository Markdown, and JavaScript scripts"
+depends = ["nvim:format", "pi:format", "docs:format", "scripts:format"]
 
 [tasks.lint]
-description = "Lint Pi extensions"
-depends = ["pi:lint"]
+description = "Lint Pi extensions and JavaScript scripts"
+depends = ["pi:lint", "scripts:lint"]
 
 [tasks.typecheck]
-description = "Typecheck Pi extensions"
-depends = ["pi:typecheck"]
+description = "Typecheck Pi extensions and JavaScript scripts"
+depends = ["pi:typecheck", "scripts:typecheck"]
 
 [tasks."nvim:format"]
 description = "Format the Neovim Lua configuration with StyLua"
@@ -40,6 +40,33 @@ description = "Typecheck Pi extensions without emitting files"
 dir = "{{config_root}}"
 depends = ["pi:deps"]
 run = "tsc --project tsconfig.json"
+
+[tasks."scripts:format"]
+description = "Format JavaScript scripts and tests with Oxfmt"
+dir = "{{config_root}}"
+run = "oxfmt --write 'scripts/**/*.mjs'"
+
+[tasks."scripts:format:check"]
+description = "Check JavaScript script formatting without writing files"
+dir = "{{config_root}}"
+run = "oxfmt --check 'scripts/**/*.mjs'"
+
+[tasks."scripts:lint"]
+description = "Lint JavaScript scripts and tests with Oxlint"
+dir = "{{config_root}}"
+run = "oxlint scripts"
+
+[tasks."scripts:typecheck"]
+description = "Typecheck JavaScript scripts and tests without emitting files"
+dir = "{{config_root}}"
+depends = ["pi:deps"]
+run = "tsc --project tsconfig.scripts.json"
+
+[tasks."scripts:test"]
+description = "Run all JavaScript script tests with Node's test runner"
+dir = "{{config_root}}"
+depends = ["pi:deps"]
+run = "node --test 'scripts/**/*.test.mjs'"
 
 [tasks."docs:format"]
 description = "Format all repository Markdown, including hidden directories, with Oxfmt"

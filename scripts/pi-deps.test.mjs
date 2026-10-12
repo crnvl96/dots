@@ -5,6 +5,7 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { dependencySpecs } from './pi-deps.mjs';
 
+/** @param {import('node:test').TestContext} t */
 function fixture(t, piVersion = '1.2.0', typeboxVersion = '1.4.2') {
   const root = mkdtempSync(join(tmpdir(), 'pi-deps-test-'));
   t.after(() => rmSync(root, { recursive: true, force: true }));

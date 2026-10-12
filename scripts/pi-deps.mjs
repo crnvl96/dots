@@ -6,10 +6,18 @@ import { fileURLToPath } from 'node:url';
 
 const PI_PACKAGE = '@earendil-works/pi-coding-agent';
 
+/**
+ * @param {string} path
+ * @returns {{ name?: unknown, version?: unknown }}
+ */
 function readPackage(path) {
   return JSON.parse(readFileSync(path, 'utf8'));
 }
 
+/**
+ * @param {string} entry
+ * @param {string} name
+ */
 function findPackage(entry, name) {
   let directory = dirname(realpathSync(entry));
   while (true) {
@@ -18,7 +26,7 @@ function findPackage(entry, name) {
       const manifest = readPackage(path);
       if (manifest.name === name) return manifest;
     } catch (error) {
-      if (error.code !== 'ENOENT') throw error;
+      if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT')) throw error;
     }
     const parent = dirname(directory);
     if (parent === directory) throw new Error(`Cannot find package metadata for ${name}`);
@@ -26,6 +34,7 @@ function findPackage(entry, name) {
   }
 }
 
+/** @param {string} installRoot */
 export function dependencySpecs(installRoot, nodeVersion = process.versions.node) {
   const nodeMajor = /^(?:v)?(\d+)\./.exec(nodeVersion)?.[1];
   if (!nodeMajor) throw new Error(`Invalid Node version: ${nodeVersion}`);
@@ -75,7 +84,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     main();
   } catch (error) {
-    console.error(`Pi dependency sync failed: ${error.message}`);
+    console.error(`Pi dependency sync failed: ${error instanceof Error ? error.message : String(error)}`);
     process.exitCode = 1;
   }
 }

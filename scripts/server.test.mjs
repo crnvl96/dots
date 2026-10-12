@@ -9,6 +9,10 @@ import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 import { createDocsServer } from './server.mjs';
 
+/**
+ * @param {import('node:test').TestContext} t
+ * @param {Record<string, string>} files
+ */
 async function fixture(t, files = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'docs-server-test-'));
   const root = join(directory, 'docs');
@@ -24,14 +28,18 @@ async function fixture(t, files = {}) {
   });
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const port = server.address().port;
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const port = address.port;
   return {
     root,
     directory,
+    /** @param {string} path */
     get(path, method = 'GET') {
       // Unlike fetch/URL, this preserves traversal paths for security tests.
       return new Promise((resolve, reject) => {
         const req = request({ host: '127.0.0.1', port, path, method }, (response) => {
+          /** @type {Buffer[]} */
           const chunks = [];
           response.on('data', (chunk) => chunks.push(chunk));
           response.on('error', reject);
@@ -186,6 +194,7 @@ test('CLI help and invalid ports work from outside the repository', (t) => {
   const directory = mkdtempSync(join(tmpdir(), 'docs-cli-test-'));
   t.after(() => rmSync(directory, { recursive: true, force: true }));
   const script = fileURLToPath(new URL('./server.mjs', import.meta.url));
+  /** @param {...string} args */
   const run = (...args) => spawnSync(process.execPath, [script, ...args], { cwd: directory, encoding: 'utf8' });
   const help = run('--help');
   assert.equal(help.status, 0);
@@ -202,7 +211,9 @@ test('default document root is repository docs, not the current directory', asyn
   t.after(() => new Promise((resolve) => server.close(resolve)));
   server.listen(0, '127.0.0.1');
   await once(server, 'listening');
-  const response = await fetch(`http://127.0.0.1:${server.address().port}/`);
+  const address = server.address();
+  assert.ok(address && typeof address !== 'string');
+  const response = await fetch(`http://127.0.0.1:${address.port}/`);
   assert.equal(response.status, 200);
   assert.match(await response.text(), /href="\/verification-roadmap.md"/);
 });
