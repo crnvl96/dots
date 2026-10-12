@@ -35,6 +35,10 @@ agent-browser skills get agentcore         # AWS Bedrock AgentCore cloud browser
 
 Run `agent-browser skills list` to see everything available on the installed version.
 
+## Taking screenshots
+
+Before taking screenshots to verify UI work or to share (PRs, chat), read [references/screenshots.md](references/screenshots.md), including its **Runtime configuration** section. Defaults: 2x resolution (`set viewport 1600 1000 2`) and dark theme (`--color-scheme dark` on every command). Obtain authorized values and securely export the required `DEMO_*` variables at runtime; ask for missing values or an approved source. Reuse one unique session per screenshot task, exclude output files before capture, and review screenshots for identifying data before sharing. Never discard pre-existing user edits or modify persisted records without permission. Add only sanitized lessons to the reference.
+
 ## Recording demo videos
 
 Before recording a video for people to watch (a demo, a PR walkthrough), read [references/demo-videos.md](references/demo-videos.md), including its **Runtime configuration and sensitive data** section. It covers the recipe that worked: preparing outside the take, one script per take, forced repaints, `click --human`, a macOS-style cursor with a click ring, dark mode, verifying frames, and trimming with ffmpeg. It also lists the pitfalls already hit. Adaptable example scripts are in [examples/tariff-demo/](examples/tariff-demo/).
