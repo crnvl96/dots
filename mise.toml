@@ -9,12 +9,12 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format Neovim Lua, Pi extensions, repository JSON, TOML and Markdown, and JavaScript scripts"
-depends = ["nvim:format", "pi:format", "json:format", "toml:format", "docs:format", "scripts:format"]
+description = "Format Neovim Lua, Pi extensions, repository JSON, TOML and Markdown, JavaScript scripts, and shell scripts"
+depends = ["nvim:format", "pi:format", "json:format", "toml:format", "docs:format", "scripts:format", "shell:format"]
 
 [tasks.lint]
-description = "Lint Pi extensions and JavaScript scripts"
-depends = ["pi:lint", "scripts:lint"]
+description = "Lint Pi extensions, JavaScript scripts, and shell scripts"
+depends = ["pi:lint", "scripts:lint", "shell:lint"]
 
 [tasks.typecheck]
 description = "Typecheck Pi extensions and JavaScript scripts"
@@ -49,6 +49,26 @@ run = "oxfmt --write '**/*.toml'"
 description = "Check repository TOML formatting without writing files"
 dir = "{{config_root}}"
 run = "oxfmt --check '**/*.toml'"
+
+[tasks."shell:format"]
+description = "Format the Claude status-line Bash script with shfmt and two-space indentation"
+dir = "{{config_root}}"
+run = "shfmt -ln bash -i 2 -w home/.claude/statusline.sh"
+
+[tasks."shell:format:check"]
+description = "Check Bash script formatting without writing files"
+dir = "{{config_root}}"
+run = "shfmt -ln bash -i 2 -d home/.claude/statusline.sh"
+
+[tasks."shell:lint"]
+description = "Lint the Claude status-line Bash script with ShellCheck; reject all findings"
+dir = "{{config_root}}"
+run = "shellcheck --shell=bash home/.claude/statusline.sh"
+
+[tasks."shell:syntax"]
+description = "Validate Bash script syntax with macOS system Bash without executing it"
+dir = "{{config_root}}"
+run = "/bin/bash -n home/.claude/statusline.sh"
 
 [tasks."pi:lint"]
 description = "Lint Pi extensions"

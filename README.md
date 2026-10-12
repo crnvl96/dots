@@ -18,20 +18,24 @@ Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run 
 
 ```terminal
 mise run <task>                            # Run any task below by its full name
-├── format                                 # Format Neovim Lua, Pi extensions, JSON, TOML, Markdown, and JavaScript scripts
+├── format                                 # Format Neovim Lua, Pi extensions, JSON, TOML, Markdown, JavaScript, and shell scripts
 │   ├── nvim:format                        # Format Neovim Lua using .stylua.toml
 │   ├── pi:format                          # Format Pi TypeScript extensions using .oxfmtrc.json
 │   ├── json:format                        # Format all non-lockfile JSON, including hidden directories, using .oxfmtrc.json
 │   ├── toml:format                        # Format all TOML, including hidden files and directories, using .oxfmtrc.json
 │   ├── docs:format                        # Format all Markdown, including hidden directories, using .oxfmtrc.json
-│   └── scripts:format                     # Format scripts/**/*.mjs using .oxfmtrc.json
+│   ├── scripts:format                     # Format scripts/**/*.mjs using .oxfmtrc.json
+│   └── shell:format                       # Format home/.claude/statusline.sh with shfmt (Bash, two spaces)
 ├── json:format:check                      # Check non-lockfile JSON formatting without writing files
 ├── toml:format:check                      # Check TOML formatting without writing files
 ├── docs:format:check                      # Check Markdown formatting without writing files
 ├── scripts:format:check                   # Check JavaScript script formatting without writing files
-├── lint                                   # Lint Pi extensions and JavaScript scripts
+├── shell:format:check                     # Check Bash formatting without writing files
+├── lint                                   # Lint Pi extensions, JavaScript scripts, and shell scripts
 │   ├── pi:lint                            # Lint extensions using .oxlintrc.json; reject warnings
-│   └── scripts:lint                       # Lint scripts using .oxlintrc.json; reject warnings
+│   ├── scripts:lint                       # Lint scripts using .oxlintrc.json; reject warnings
+│   └── shell:lint                         # Lint home/.claude/statusline.sh with ShellCheck; reject all findings
+├── shell:syntax                           # Check Bash syntax with /bin/bash -n without executing the script
 ├── typecheck                              # Typecheck Pi extensions and JavaScript scripts
 │   ├── pi:typecheck                       # Install dependencies, then typecheck using tsconfig.json
 │   │   └── pi:deps                        # Install development dependencies from the lockfile
@@ -93,17 +97,21 @@ Use the same dependency-sync step after changing the configured Node major. Comm
 ### Format and validate configuration, documentation, and script changes
 
 ```sh
-# Format Neovim Lua, Pi extensions, non-lockfile JSON, TOML, Markdown, and JavaScript scripts
+# Format Neovim Lua, Pi extensions, non-lockfile JSON, TOML, Markdown, JavaScript, and shell scripts
 mise run format
 
-# Check JSON, TOML, Markdown, and JavaScript formatting without changing files
+# Check JSON, TOML, Markdown, JavaScript, and shell formatting without changing files
 mise run json:format:check
 mise run toml:format:check
 mise run docs:format:check
 mise run scripts:format:check
+mise run shell:format:check
 
-# Check Pi extensions and JavaScript scripts for lint errors and warnings
+# Check Pi extensions, JavaScript scripts, and shell scripts for lint findings
 mise run lint
+
+# Check Bash syntax without executing the status-line script
+mise run shell:syntax
 
 # Install locked dev dependencies and check extension and JavaScript types
 mise run typecheck
@@ -115,3 +123,5 @@ mise run scripts:test
 JSON formatting includes root and hidden-directory configuration files, but excludes the generated `package-lock.json` and `home/.config/nvim/nvim-pack-lock.json` to preserve their generator-owned layout. JSON schema validation is not yet implemented.
 
 TOML formatting covers `mise.toml`, `.stylua.toml`, and `home/.config/mise/config.toml`, as well as future non-ignored TOML files. It does not run bootstrap or install tools. Dedicated TOML syntax/duplicate-key and schema validation remain planned.
+
+Shell checks explicitly cover `home/.claude/statusline.sh`: shfmt uses the Bash dialect and two-space indentation, ShellCheck rejects all findings, and `/bin/bash -n` checks compatibility with macOS system Bash without executing the script. shfmt and ShellCheck are declared Homebrew packages installed by `bootstrap:brew`; the shell verification tasks do not install tools or run the script.

@@ -35,6 +35,8 @@ lua-language-server = "latest"
 "brew:git" = "latest"
 "brew:neovim" = "latest"
 "brew:ripgrep" = "latest"
+"brew:shellcheck" = "latest"
+"brew:shfmt" = "latest"
 "brew:tree" = "latest"
 "brew:tree-sitter-cli" = "latest"
 
