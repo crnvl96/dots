@@ -1,6 +1,8 @@
 # Dots
 
-**[mise](https://mise.jdx.dev/) task list**
+Personal dotfiles, managed by [mise](https://mise.jdx.dev/).
+
+## Task list
 
 ```terminal
 mise run <task>                            # Run any task below by its full name
@@ -27,4 +29,45 @@ mise run <task>                            # Run any task below by its full name
 │   └── brew:upgrade:preview               # Preview Homebrew package upgrades without applying them
 └── tools:upgrade                          # Preview and upgrade configured mise tools within their version constraints
     └── tools:upgrade:preview              # Preview mise tool upgrades without applying them
+```
+
+## Common workflows
+
+Run these commands from the repository root with mise available.
+
+### Bootstrap a machine
+
+```sh
+# Link dotfiles first, then install packages and tools, apply macOS settings, and verify
+mise run bootstrap:apply
+```
+
+If dotfiles are already linked and should remain untouched, use `mise run bootstrap:without-dotfiles` instead. Each scope previews its changes before applying them.
+
+### Upgrade Pi and its development dependencies
+
+```sh
+# Upgrade only the mise-managed Pi package
+mise upgrade npm:@earendil-works/pi-coding-agent --yes
+
+# Sync dev dependencies with installed Pi, its actual TypeBox version, and active Node
+mise run pi:deps:upgrade
+
+# Verify extension compatibility with the updated dependencies
+mise run typecheck
+```
+
+Use the same dependency-sync step after changing the configured Node major. Commit the resulting `package.json` and `package-lock.json` changes together.
+
+### Format and validate configuration changes
+
+```sh
+# Format Neovim and Pi configurations
+mise run format
+
+# Check Pi extensions for lint errors and warnings
+mise run lint
+
+# Install locked dev dependencies and check extension types
+mise run typecheck
 ```
