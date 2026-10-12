@@ -124,4 +124,6 @@ JSON formatting includes root and hidden-directory configuration files, but excl
 
 TOML formatting covers `mise.toml`, `.stylua.toml`, and `home/.config/mise/config.toml`, as well as future non-ignored TOML files. It does not run bootstrap or install tools. Dedicated TOML syntax/duplicate-key and schema validation remain planned.
 
+StyLua and LuaLS (`lua-language-server`) are declared Homebrew packages, not mise tools. Use `bootstrap:brew` to install them and `brew:upgrade` to upgrade them; `bootstrap:tools` and `tools:upgrade` do not manage them.
+
 Shell checks explicitly cover `home/.claude/statusline.sh`: shfmt uses the Bash dialect and two-space indentation, ShellCheck rejects all findings, and `/bin/bash -n` checks compatibility with macOS system Bash without executing the script. shfmt and ShellCheck are declared Homebrew packages installed by `bootstrap:brew`; the shell verification tasks do not install tools or run the script.

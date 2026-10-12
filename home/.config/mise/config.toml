@@ -23,8 +23,6 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:oxfmt" = "latest"
 "npm:oxlint" = "latest"
 "npm:typescript" = "latest"
-stylua = "latest"
-lua-language-server = "latest"
 
 [bootstrap.packages]
 "brew:bat" = "latest"
@@ -33,10 +31,12 @@ lua-language-server = "latest"
 "brew:fzf" = "latest"
 "brew:gh" = "latest"
 "brew:git" = "latest"
+"brew:lua-language-server" = "latest"
 "brew:neovim" = "latest"
 "brew:ripgrep" = "latest"
 "brew:shellcheck" = "latest"
 "brew:shfmt" = "latest"
+"brew:stylua" = "latest"
 "brew:tree" = "latest"
 "brew:tree-sitter-cli" = "latest"
 
