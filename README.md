@@ -2,6 +2,18 @@
 
 Personal dotfiles, managed by [mise](https://mise.jdx.dev/).
 
+## Docs
+
+Keep browsable documentation in [`docs/`](docs/), starting with the [verification roadmap](docs/verification-roadmap.md). Markdown files can be placed in subfolders; no index file or registration is needed.
+
+```sh
+mise run docs:serve
+```
+
+Open <http://127.0.0.1:8787/> for an index grouped by folder. Each document has index/previous/next links and heading anchors; relative Markdown links work normally. Refresh after edits to pick up changed or newly added files. Only `.md` files under `docs/` are served; local image assets are not. Raw HTML is displayed as text. Stop with Ctrl+C.
+
+Use `mise run docs:serve 9000` for another port and `mise run docs:test` to run the server tests. Both tasks install locked development dependencies first. The server is [`scripts/server.mjs`](scripts/server.mjs), using Node's HTTP server and Markdown-it; there is no frontend build.
+
 ## Task list
 
 ```terminal
@@ -14,6 +26,10 @@ mise run <task>                            # Run any task below by its full name
 ├── typecheck                              # Typecheck Pi extensions
 │   └── pi:typecheck                       # Install dependencies, then typecheck using tsconfig.json
 │       └── pi:deps                        # Install development dependencies from the lockfile
+├── docs:serve                             # Browse docs Markdown on localhost (default port 8787)
+│   └── pi:deps                            # Install development dependencies from the lockfile
+├── docs:test                              # Test docs rendering, navigation, and file access
+│   └── pi:deps                            # Install development dependencies from the lockfile
 ├── bootstrap:preview                      # Preview all currently loaded bootstrap configuration
 ├── bootstrap:apply                        # Bootstrap every scope, starting with dotfiles
 │   ├── bootstrap:dotfiles                 # Preview and link repository-managed dotfiles
