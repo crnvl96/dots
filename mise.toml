@@ -28,7 +28,7 @@ run = "stylua --verify ."
 [tasks."pi:format"]
 description = "Format Pi extensions and managed JSON configuration"
 dir = "{{config_root}}/home/.pi"
-run = "oxfmt --write agent/extensions/*.ts agent/keybindings.json agent/mcp.json agent/settings.json"
+run = "oxfmt --write 'agent/extensions/*.ts' 'agent/*.json'"
 
 [tasks."pi:lint"]
 description = "Lint Pi extensions"
@@ -45,13 +45,55 @@ description = "Preview bootstrap for all repository-managed configuration"
 dir = "{{config_root}}"
 run = "mise bootstrap --dry-run"
 
-[tasks."bootstrap:apply"]
-description = "Preview and apply macOS settings, Brew packages, dotfiles, tools, and hooks, then verify"
+[tasks."bootstrap:dotfiles"]
+description = "Preview and bootstrap repository-managed dotfiles"
 dir = "{{config_root}}"
-depends = ["bootstrap:preview"]
 run = [
-  "mise bootstrap --yes",
+  "mise bootstrap --only dotfiles --dry-run",
+  "mise bootstrap --only dotfiles --yes",
+]
+
+[tasks."bootstrap:tools"]
+description = "Preview and bootstrap globally declared tools"
+dir = "{{config_root}}"
+run = [
+  "mise bootstrap --only tools --dry-run",
+  "mise bootstrap --only tools --yes",
+]
+
+[tasks."bootstrap:brew"]
+description = "Preview and bootstrap globally declared Homebrew packages"
+dir = "{{config_root}}"
+run = [
+  "mise bootstrap packages apply --manager brew --dry-run",
+  "mise bootstrap packages apply --manager brew --yes",
+]
+
+[tasks."bootstrap:macos"]
+description = "Preview and bootstrap macOS defaults and LaunchAgents"
+dir = "{{config_root}}"
+run = [
+  "mise bootstrap --only macos-defaults,macos-launchd-agents --dry-run",
+  "mise bootstrap --only macos-defaults,macos-launchd-agents --yes",
+]
+
+[tasks."bootstrap:without-dotfiles"]
+description = "Bootstrap Brew packages, macOS configuration, and tools, then verify"
+dir = "{{config_root}}"
+run = [
+  { task = "bootstrap:brew" },
+  { task = "bootstrap:macos" },
+  { task = "bootstrap:tools" },
   { task = "bootstrap:check" },
+]
+
+[tasks."bootstrap:apply"]
+description = "Bootstrap dotfiles first, then all remaining scopes, and verify"
+dir = "{{config_root}}"
+# Sequential task calls ensure global configuration is linked before it is loaded.
+run = [
+  { task = "bootstrap:dotfiles" },
+  { task = "bootstrap:without-dotfiles" },
 ]
 
 [tasks."bootstrap:check"]

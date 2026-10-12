@@ -4,29 +4,12 @@
   "defaultProvider": "openai",
   "defaultModel": "gpt-6.1-sol",
   "defaultThinkingLevel": "high",
-  "codemode": {
-    "mode": "on"
-  },
-  "showHardwareCursor": true,
   "hideThinkingBlock": true,
+  "collapseChangelog": true,
   "tuiMode": "fullscreen",
   "doubleEscapeAction": "tree",
   "showCacheMissNotices": true,
   "treeFilterMode": "no-tools",
   "defaultProjectTrust": "always",
-  "defaultTools": [
-    "read",
-    "bash",
-    "edit",
-    "write",
-    "grep",
-    "find",
-    "ls",
-    "codemode",
-    "tool_search"
-  ],
-  "terminal": {
-    "showTerminalProgress": true,
-    "clearOnShrink": true
-  }
+  "defaultTools": ["+codemode"]
 }
