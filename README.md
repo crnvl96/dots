@@ -7,12 +7,12 @@ Personal dotfiles, managed by [mise](https://mise.jdx.dev/).
 ```terminal
 mise run <task>                            # Run any task below by its full name
 ├── format                                 # Format Neovim and Pi configurations
-│   ├── nvim:format                        # Format Neovim Lua with StyLua
-│   └── pi:format                          # Format Pi extensions and agent JSON
+│   ├── nvim:format                        # Format Neovim Lua using .stylua.toml
+│   └── pi:format                          # Format Pi extensions and JSON using .oxfmtrc.json
 ├── lint                                   # Lint Pi extensions
-│   └── pi:lint                            # Run Oxlint with warnings treated as errors
+│   └── pi:lint                            # Lint extensions using .oxlintrc.json; reject warnings
 ├── typecheck                              # Typecheck Pi extensions
-│   └── pi:typecheck                       # Install dependencies, then run strict TypeScript checks
+│   └── pi:typecheck                       # Install dependencies, then typecheck using tsconfig.json
 │       └── pi:deps                        # Install development dependencies from the lockfile
 ├── bootstrap:preview                      # Preview all currently loaded bootstrap configuration
 ├── bootstrap:apply                        # Bootstrap every scope, starting with dotfiles

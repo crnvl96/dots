@@ -22,24 +22,24 @@ depends = ["pi:typecheck"]
 
 [tasks."nvim:format"]
 description = "Format the Neovim Lua configuration with StyLua"
-dir = "{{config_root}}/home/.config/nvim"
-run = "stylua --verify ."
+dir = "{{config_root}}"
+run = "stylua --verify --config-path .stylua.toml home/.config/nvim"
 
 [tasks."pi:format"]
 description = "Format Pi extensions and managed JSON configuration"
-dir = "{{config_root}}/home/.pi"
-run = "oxfmt --write 'agent/extensions/*.ts' 'agent/*.json'"
+dir = "{{config_root}}"
+run = "oxfmt --write 'home/.pi/agent/extensions/*.ts' 'home/.pi/agent/*.json'"
 
 [tasks."pi:lint"]
 description = "Lint Pi extensions"
-dir = "{{config_root}}/home/.pi"
-run = "oxlint --deny-warnings agent/extensions/*.ts"
+dir = "{{config_root}}"
+run = "oxlint home/.pi/agent/extensions/*.ts"
 
 [tasks."pi:typecheck"]
 description = "Typecheck Pi extensions without emitting files"
-dir = "{{config_root}}/home/.pi"
+dir = "{{config_root}}"
 depends = ["pi:deps"]
-run = "tsc --noEmit --strict --skipLibCheck --target esnext --module preserve --moduleResolution bundler agent/extensions/*.ts"
+run = "tsc --project tsconfig.json"
 
 [tasks."pi:deps"]
 description = "Install locked Pi extension development dependencies"
@@ -65,27 +65,17 @@ run = "mise bootstrap --dry-run"
 [tasks."bootstrap:dotfiles"]
 description = "Preview and bootstrap repository-managed dotfiles"
 dir = "{{config_root}}"
-run = [
-  "mise bootstrap --only dotfiles --dry-run",
-  "mise bootstrap --only dotfiles --yes",
-]
+run = ["mise bootstrap --only dotfiles --dry-run", "mise bootstrap --only dotfiles --yes"]
 
 [tasks."bootstrap:tools"]
 description = "Preview and bootstrap globally declared tools, then install development dependencies"
 dir = "{{config_root}}"
-run = [
-  "mise bootstrap --only tools --dry-run",
-  "mise bootstrap --only tools --yes",
-  { task = "pi:deps" },
-]
+run = ["mise bootstrap --only tools --dry-run", "mise bootstrap --only tools --yes", { task = "pi:deps" }]
 
 [tasks."bootstrap:brew"]
 description = "Preview and bootstrap globally declared Homebrew packages"
 dir = "{{config_root}}"
-run = [
-  "mise bootstrap packages apply --manager brew --dry-run",
-  "mise bootstrap packages apply --manager brew --yes",
-]
+run = ["mise bootstrap packages apply --manager brew --dry-run", "mise bootstrap packages apply --manager brew --yes"]
 
 [tasks."bootstrap:macos"]
 description = "Preview and bootstrap macOS defaults and LaunchAgents"
@@ -109,19 +99,12 @@ run = [
 description = "Bootstrap dotfiles first, then all remaining scopes, and verify"
 dir = "{{config_root}}"
 # Sequential task calls ensure global configuration is linked before it is loaded.
-run = [
-  { task = "bootstrap:dotfiles" },
-  { task = "bootstrap:without-dotfiles" },
-]
+run = [{ task = "bootstrap:dotfiles" }, { task = "bootstrap:without-dotfiles" }]
 
 [tasks."bootstrap:check"]
 description = "Check Git whitespace and verify repository bootstrap state"
 dir = "{{config_root}}"
-run = [
-  "git diff --check",
-  "git status --short --untracked-files=all",
-  "mise bootstrap status --missing",
-]
+run = ["git diff --check", "git status --short --untracked-files=all", "mise bootstrap status --missing"]
 
 [tasks."brew:upgrade:preview"]
 description = "Preview upgrades for globally declared Homebrew formulae"
