@@ -16,7 +16,7 @@ cat = "bat"
 [tools]
 go = "1.27.2"
 node = "24"
-rust = "1.99"
+rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:@earendil-works/pi-coding-agent" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
 

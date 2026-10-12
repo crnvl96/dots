@@ -1,5 +1,5 @@
 [tools]
-rust = "1.99"
+rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 stylua = "latest"
 lua-language-server = "latest"
 tree-sitter = "latest"
