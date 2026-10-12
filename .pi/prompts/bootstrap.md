@@ -1,4 +1,4 @@
 ---
-description: Run a full mise bootstrap across all config scopes, dry-run first
+description: Run the repository's full mise bootstrap, dry-run first
 ---
-Run a full mise bootstrap across all config scopes, dry-run first.
+Run the repository's full mise bootstrap from the root mise.toml, dry-run first.

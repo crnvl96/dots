@@ -106,6 +106,7 @@ miniclue.setup({
     { mode = { 'n', 'x' }, keys = 'z' },
   },
   clues = {
+    { mode = 'n', keys = '<Leader>d', desc = '+Diff' },
     { mode = 'n', keys = '<Leader>e', desc = '+Explorer' },
     { mode = 'n', keys = '<Leader>f', desc = '+Find' },
     { mode = 'n', keys = '<Leader>l', desc = '+LSP' },

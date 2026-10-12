@@ -22,6 +22,7 @@ vim.api.nvim_create_autocmd('PackChanged', {
 vim.pack.add({
   'https://github.com/nvim-mini/mini.nvim',
   'https://github.com/tpope/vim-fugitive',
+  'https://github.com/esmuellert/codediff.nvim',
   'https://github.com/nvim-treesitter/nvim-treesitter',
   'https://github.com/nvim-treesitter/nvim-treesitter-textobjects',
   'https://github.com/neovim/nvim-lspconfig',

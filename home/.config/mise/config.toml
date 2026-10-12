@@ -16,9 +16,13 @@ cat = "bat"
 [tools]
 go = "1.27.2"
 node = "24"
+python = "3.14"
 rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:@earendil-works/pi-coding-agent" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
+"npm:oxfmt" = "latest"
+"npm:oxlint" = "latest"
+"npm:typescript" = "latest"
 
 [bootstrap.packages]
 "brew:bat" = "latest"
@@ -30,6 +34,7 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "brew:neovim" = "latest"
 "brew:ripgrep" = "latest"
 "brew:tree" = "latest"
+"brew:tree-sitter-cli" = "latest"
 
 [bootstrap.macos.dock]
 autohide = true                       # Hide the Dock until the pointer reaches it

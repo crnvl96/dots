@@ -1,6 +1,11 @@
 [settings]
 task.run_auto_install = false
 
+# Tools for the Neovim and Pi configurations.
+[tools]
+stylua = "latest"
+lua-language-server = "latest"
+
 [dotfiles."~"]
 source = "home"
 mode = "symlink-each"
@@ -8,37 +13,59 @@ relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
 
+[tasks.format]
+description = "Format the Neovim and Pi configurations"
+depends = ["nvim:format", "pi:format"]
+
+[tasks.lint]
+description = "Lint Pi extensions"
+depends = ["pi:lint"]
+
+[tasks.typecheck]
+description = "Typecheck Pi extensions"
+depends = ["pi:typecheck"]
+
+[tasks."nvim:format"]
+description = "Format the Neovim Lua configuration with StyLua"
+dir = "{{config_root}}/home/.config/nvim"
+run = "stylua --verify ."
+
+[tasks."pi:format"]
+description = "Format Pi extensions and managed JSON configuration"
+dir = "{{config_root}}/home/.pi"
+run = "oxfmt --write agent/extensions/*.ts agent/keybindings.json agent/mcp.json agent/settings.json"
+
+[tasks."pi:lint"]
+description = "Lint Pi extensions"
+dir = "{{config_root}}/home/.pi"
+run = "oxlint --deny-warnings agent/extensions/*.ts"
+
+[tasks."pi:typecheck"]
+description = "Typecheck Pi extensions without emitting files"
+dir = "{{config_root}}/home/.pi"
+run = "tsc --noEmit --strict --skipLibCheck --target esnext --module preserve --moduleResolution bundler agent/extensions/*.ts"
+
 [tasks."bootstrap:preview"]
-description = "Preview bootstrap across the main, Neovim, and Pi config scopes"
+description = "Preview bootstrap for all repository-managed configuration"
 dir = "{{config_root}}"
-# Preview source configs so this also works before their target links exist.
-run = [
-  "mise bootstrap --dry-run",
-  "mise -C home/.config/nvim bootstrap --dry-run",
-  "mise -C home/.pi bootstrap --dry-run",
-]
+run = "mise bootstrap --dry-run"
 
 [tasks."bootstrap:apply"]
-description = "Preview and apply macOS settings, Brew packages, dotfiles, tools, and hooks across all scopes, then verify"
+description = "Preview and apply macOS settings, Brew packages, dotfiles, tools, and hooks, then verify"
 dir = "{{config_root}}"
 depends = ["bootstrap:preview"]
-# Apply the main scope first to deploy the Neovim and Pi config links.
 run = [
   "mise bootstrap --yes",
-  'mise -C "$HOME/.config/nvim" bootstrap --yes',
-  'mise -C "$HOME/.pi" bootstrap --yes',
   { task = "bootstrap:check" },
 ]
 
 [tasks."bootstrap:check"]
-description = "Check Git whitespace and verify bootstrap state across all config scopes"
+description = "Check Git whitespace and verify repository bootstrap state"
 dir = "{{config_root}}"
 run = [
   "git diff --check",
   "git status --short --untracked-files=all",
   "mise bootstrap status --missing",
-  'mise -C "$HOME/.config/nvim" bootstrap status --missing',
-  'mise -C "$HOME/.pi" bootstrap status --missing',
 ]
 
 [tasks."brew:upgrade:preview"]

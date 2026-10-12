@@ -1,4 +1,4 @@
-vim.lsp.enable({ 'gopls', 'tsc', 'lua_ls' })
+vim.lsp.enable({ 'gopls', 'tsc', 'lua_ls', 'rust_analyzer' })
 
 vim.keymap.set('n', 'K', '<Cmd>lua vim.lsp.buf.hover()<CR>', { desc = 'Hover symbol' })
 vim.keymap.set('i', '<C-k>', '<Cmd>lua vim.lsp.buf.signature_help()<CR>', { desc = 'Signature help' })
