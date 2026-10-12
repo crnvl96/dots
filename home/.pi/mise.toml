@@ -1,4 +1,5 @@
 [tools]
+node = "24"
 "npm:oxfmt" = "latest"
 "npm:oxlint" = "latest"
 "npm:typescript" = "latest"
