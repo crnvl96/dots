@@ -19,11 +19,9 @@ run = [
 ]
 
 [tasks."bootstrap:apply"]
-description = "Preview, confirm, bootstrap all config scopes, then verify state"
+description = "Preview and apply macOS settings, Brew packages, dotfiles, tools, and hooks across all scopes, then verify"
 dir = "{{config_root}}"
 depends = ["bootstrap:preview"]
-confirm = { message = "Apply the previewed changes to macOS settings, Brew packages, dotfiles, tools, and configured hooks across all config scopes? Stop if there are conflicts or unexpected changes.", default = "no" }
-raw = true
 # Apply the main scope first to deploy the Neovim and Pi config links.
 run = [
   "mise bootstrap --yes",
@@ -49,9 +47,7 @@ dir = "{{config_root}}"
 run = "mise bootstrap packages upgrade --manager brew --dry-run"
 
 [tasks."brew:upgrade"]
-description = "Preview, confirm, then upgrade globally declared Homebrew formulae"
+description = "Preview and upgrade globally declared Brew packages only"
 dir = "{{config_root}}"
 depends = ["brew:upgrade:preview"]
-confirm = { message = "Upgrade only the previewed Brew packages? This task does not apply macOS settings, dotfiles, or mise tools.", default = "no" }
-raw = true
 run = "mise bootstrap packages upgrade --manager brew --yes"
