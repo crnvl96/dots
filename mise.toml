@@ -1,11 +1,6 @@
 [settings]
 task.run_auto_install = false
 
-# Tools for the Neovim and Pi configurations.
-[tools]
-stylua = "latest"
-lua-language-server = "latest"
-
 [dotfiles."~"]
 source = "home"
 mode = "symlink-each"

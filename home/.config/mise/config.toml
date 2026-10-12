@@ -23,6 +23,8 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:oxfmt" = "latest"
 "npm:oxlint" = "latest"
 "npm:typescript" = "latest"
+stylua = "latest"
+lua-language-server = "latest"
 
 [bootstrap.packages]
 "brew:bat" = "latest"
