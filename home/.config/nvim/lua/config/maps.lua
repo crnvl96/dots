@@ -59,7 +59,7 @@ end
 
 vim.keymap.set({ 'n', 'v', 'i', 'o' }, '<Esc>', '<Esc><Cmd>noh<CR>', { desc = 'Clear highlights' })
 
-vim.keymap.set('x', 'p', [["_dP]], { desc = 'Paste in visual mode' })
+vim.keymap.set('x', 'p', 'P', { desc = 'Paste in visual mode' })
 
 vim.keymap.set('c', '<C-a>', '<Home>', { desc = 'Move to start of command line' })
 vim.keymap.set('c', '<C-e>', '<End>', { desc = 'Move to end of command line' })
