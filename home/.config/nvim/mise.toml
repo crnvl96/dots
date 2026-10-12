@@ -1,6 +1,5 @@
-[bootstrap.packages]
-"brew:lua-language-server" = "latest"
-"brew:stylua" = "latest"
+[tools]
+rust = "1.99"
 
 [tasks.format]
 description = "Format the Neovim Lua configuration with StyLua"
