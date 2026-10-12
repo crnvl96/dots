@@ -9,8 +9,8 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format Neovim Lua, Pi extensions, repository JSON and Markdown, and JavaScript scripts"
-depends = ["nvim:format", "pi:format", "json:format", "docs:format", "scripts:format"]
+description = "Format Neovim Lua, Pi extensions, repository JSON, TOML and Markdown, and JavaScript scripts"
+depends = ["nvim:format", "pi:format", "json:format", "toml:format", "docs:format", "scripts:format"]
 
 [tasks.lint]
 description = "Lint Pi extensions and JavaScript scripts"
@@ -39,6 +39,16 @@ run = "oxfmt --write '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-p
 description = "Check repository JSON formatting without writing files; exclude generated lockfiles"
 dir = "{{config_root}}"
 run = "oxfmt --check '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-pack-lock.json'"
+
+[tasks."toml:format"]
+description = "Format all repository TOML, including hidden files and directories, with Oxfmt"
+dir = "{{config_root}}"
+run = "oxfmt --write '**/*.toml'"
+
+[tasks."toml:format:check"]
+description = "Check repository TOML formatting without writing files"
+dir = "{{config_root}}"
+run = "oxfmt --check '**/*.toml'"
 
 [tasks."pi:lint"]
 description = "Lint Pi extensions"
