@@ -18,10 +18,7 @@ cat = "bat"
 [tools]
 go = "1.27"
 node = "24"
-bun = "1.4"
-python = "3.14"
 rust = "1.99"
-uv = "0.12"
 "npm:@earendil-works/pi-coding-agent" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
 
