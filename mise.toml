@@ -38,7 +38,24 @@ run = "oxlint --deny-warnings agent/extensions/*.ts"
 [tasks."pi:typecheck"]
 description = "Typecheck Pi extensions without emitting files"
 dir = "{{config_root}}/home/.pi"
+depends = ["pi:deps"]
 run = "tsc --noEmit --strict --skipLibCheck --target esnext --module preserve --moduleResolution bundler agent/extensions/*.ts"
+
+[tasks."pi:deps"]
+description = "Install locked Pi extension development dependencies"
+dir = "{{config_root}}"
+run = "npm ci --include=dev"
+
+[tasks."pi:deps:upgrade:preview"]
+description = "Preview dependency alignment with installed Pi, its TypeBox, and active Node"
+dir = "{{config_root}}"
+run = "node scripts/pi-deps.mjs --dry-run"
+
+[tasks."pi:deps:upgrade"]
+description = "Align development dependencies with installed Pi, its TypeBox, and active Node"
+dir = "{{config_root}}"
+depends = ["pi:deps:upgrade:preview"]
+run = "node scripts/pi-deps.mjs"
 
 [tasks."bootstrap:preview"]
 description = "Preview bootstrap for all repository-managed configuration"
@@ -54,11 +71,12 @@ run = [
 ]
 
 [tasks."bootstrap:tools"]
-description = "Preview and bootstrap globally declared tools"
+description = "Preview and bootstrap globally declared tools, then install development dependencies"
 dir = "{{config_root}}"
 run = [
   "mise bootstrap --only tools --dry-run",
   "mise bootstrap --only tools --yes",
+  { task = "pi:deps" },
 ]
 
 [tasks."bootstrap:brew"]
