@@ -1,5 +1,8 @@
 [tools]
 rust = "1.99"
+stylua = "latest"
+lua-language-server = "latest"
+tree-sitter = "latest"
 
 [tasks.format]
 description = "Format the Neovim Lua configuration with StyLua"

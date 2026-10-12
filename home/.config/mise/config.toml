@@ -27,12 +27,9 @@ rust = "1.99"
 "brew:fzf" = "latest"
 "brew:gh" = "latest"
 "brew:git" = "latest"
-"brew:lua-language-server" = "latest"
 "brew:neovim" = "latest"
 "brew:ripgrep" = "latest"
-"brew:stylua" = "latest"
 "brew:tree" = "latest"
-"brew:tree-sitter-cli" = "latest"
 
 [bootstrap.macos.dock]
 autohide = true                       # Hide the Dock until the pointer reaches it
