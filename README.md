@@ -35,6 +35,8 @@ mise run <task>                            # Run any task below by its full name
 
 Run these commands from the repository root with mise available.
 
+In Pi, use the repository-local `/skill:dots [goal]` skill to be interviewed, agree on a scoped plan, and have the appropriate workflow executed and verified. This skill is user-invocable only; Pi will not select it automatically. The workflows below are common examples, not the only supported routes. Use `/reload` after adding or changing the skill in an active Pi session.
+
 ### Bootstrap a machine
 
 ```sh
