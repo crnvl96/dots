@@ -2,7 +2,7 @@ import { before, describe, test } from "node:test";
 import assert from "node:assert/strict";
 import { initTheme, type ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
-import { SubagentPeekOverlay } from "./peek.js";
+import { SubagentPeekOverlay } from "../peek.js";
 
 before(() => initTheme("dark", false));
 

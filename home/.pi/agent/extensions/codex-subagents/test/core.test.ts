@@ -15,7 +15,7 @@ after(() => {
   fs.rmSync(TEST_AGENT_DIR, { recursive: true, force: true });
   fs.rmSync(TEST_TEMP_DIR, { recursive: true, force: true });
 });
-const FAKE_RPC_CHILD = path.join(import.meta.dirname, "test", "fake-rpc-child.js");
+const FAKE_RPC_CHILD = path.join(import.meta.dirname, "fake-rpc-child.js");
 process.env.PI_SUBAGENT_TEMP_DIR = TEST_TEMP_DIR;
 
 const codingAgent = await import("@earendil-works/pi-coding-agent");
@@ -41,8 +41,8 @@ const {
   parentScopeKey,
   parseAgentDefinitionText,
   taskStorageKey,
-} = await import("./core.js");
-const { formatAgentSpecLines } = await import("./peek.js");
+} = await import("../core.js");
+const { formatAgentSpecLines } = await import("../peek.js");
 
 
 test("formats the resolved subagent model and thinking for the detail overlay", () => {
@@ -369,7 +369,7 @@ describe("spawn model and thinking resolution", () => {
 });
 
 const ROUTING_CONFIG_FILE = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
-const PROVIDER_AGENTS = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "../../pi-codex-subagents/config.json"), "utf8")).providerAgents;
+const PROVIDER_AGENTS = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "../../../pi-codex-subagents/config.json"), "utf8")).providerAgents;
 
 function installProviderRoutes() {
   fs.mkdirSync(path.dirname(ROUTING_CONFIG_FILE), { recursive: true });
@@ -1022,7 +1022,7 @@ describe("extension completion delivery and TUI", () => {
         },
       },
     };
-    const { default: subagentExtension } = await import("./index.js");
+    const { default: subagentExtension } = await import("../index.js");
     try {
       subagentExtension({
         on(name: string, handler: any) { if (name === "session_shutdown") shutdown = handler; },
@@ -1098,7 +1098,7 @@ describe("extension completion delivery and TUI", () => {
     const configFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
     // A thinking suffix on an allowlist entry is tolerated and stripped from the offered pair.
     fs.writeFileSync(configFile, JSON.stringify({ models: ["test/fake:high", "typo/nope"], modelsFromEnabledModels: true }));
-    const { default: subagentExtension } = await import("./index.js");
+    const { default: subagentExtension } = await import("../index.js");
     subagentExtension(pi);
     const emit = async (name: string, event: any = {}) => {
       for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
@@ -1265,7 +1265,7 @@ describe("provider-scoped tool exposure", () => {
       ui: { notify() {} },
     };
     const emit = async (name: string) => { for (const handler of handlers.get(name) ?? []) await handler({}, ctx); };
-    const { default: extension } = await import("./index.js");
+    const { default: extension } = await import("../index.js");
     extension(pi);
     const call = (params: any) => spawn.execute("call", { task_name: "bad-route", message: "hold", ...params }, undefined, undefined, ctx);
     try {

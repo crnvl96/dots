@@ -31,16 +31,71 @@ The parent's **current provider** selects the column, including after `/model` c
 
 Routes use the exact provider ID above, not another provider serving the same model. Direct `anthropic` needs its own authentication; Radius credentials do not enable the Anthropic provider. No role prompts or Markdown templates are added. The existing system prompt and other settings are unchanged.
 
-The upstream tests and fake RPC child are included. From `home/.pi`:
+## Development
+
+### Code map
+
+`index.ts` wires one manager to the parent session's events, completion delivery,
+activity widget, tools, and browser. Start there to follow the extension lifecycle.
+
+| Location | Responsibility |
+|---|---|
+| `runtime/types.ts`, `constants.ts` | Shared data contracts and defaults |
+| `runtime/normalization.ts` | Pure configuration/template parsing, validation, and text helpers |
+| `runtime/config.ts`, `paths.ts` | Configuration, templates, system prompt, and directory locations |
+| `runtime/storage.ts` | Session-scoped records, atomic persistence, retention, and full tool outputs |
+| `runtime/resources.ts` | Explicit skill and extension resolution for children |
+| `runtime/process.ts` | Process identity, ownership checks, and active/peek markers |
+| `runtime/jsonl.ts`, `stream.ts` | Incremental RPC framing and assistant-delta assembly |
+| `runtime/events.ts` | Child logging and live-event broadcasting to overlays |
+| `runtime/manager.ts` | Recovery, child launch/RPC, finalization, waits, steering, and shutdown |
+| `tools/spawn.ts`, `models.ts` | Dynamic spawn schema, validation, and model allowlist resolution |
+| `tools/control.ts`, `helpers.ts`, `output.ts` | Wait/list/read/send/interrupt tools and shared result helpers |
+| `ui/browser.ts`, `peek.ts`, `format.ts` | Agent browser, live detail overlay, and plain-text labels |
+| `test/` | Unit tests, lifecycle/rendering regression tests, resolver, and fake RPC child |
+
+`core.ts` and `peek.ts` retain their previous exports as compatibility facades.
+New code should import the focused module it needs. The manager and detail overlay
+remain cohesive classes: their state and cleanup stay together rather than being
+spread across mutually dependent modules. Section comments in the manager mark
+its lifecycle phases.
+
+### Tests
+
+All tests use Node.js 24's standard-library test runner and assertions. No test
+framework or new dependency is added.
+
+The **34 unit tests** import only stdlib-backed local modules. They need no Pi
+installation, npm install, network access, or API credentials. From the repository
+root:
+
+```bash
+npm --prefix home/.pi/agent/extensions/codex-subagents run test:unit
+```
+
+The existing **52 regression tests** exercise child-process lifecycle, completion
+delivery, dynamic tools, and actual Pi rendering. They retain their existing SDK
+imports and fake RPC child. Run everything from `home/.pi`:
 
 ```bash
 npm ci
-# TypeScript is provided by the dotfiles' mise tools.
-tsc -p tsconfig.json
+# TypeScript is provided by the dotfiles' mise tools. The flag also permits
+# the Perplexity extension's native-Node .ts imports during the shared check.
+tsc -p tsconfig.json --allowImportingTsExtensions
 npm run test:subagents
 ```
 
-`home/.pi/package.json` pins the SDK's transitive `pi-codemode` dependency to 1.1.0; 1.2.0 removes an export required by Pi 1.1.0. The test script uses Node.js 24's built-in test runner, which isolates each file in a separate process so the core suite's module mock cannot affect the overlay suite. It enables experimental TypeScript transformation (for parameter properties) and module mocking, with a test-only resolver for local `.js` imports backed by `.ts` source files. No Bun or extra test-runner dependency is needed. Tests use unique temporary storage, fake child processes, and no paid model requests.
+Or run `npm test` inside this extension directory once the surrounding Pi SDK
+dependencies are installed.
+
+`home/.pi/package.json` pins the SDK's transitive `pi-codemode` dependency to 1.1.0;
+1.2.0 removes an export required by Pi 1.1.0. The full suite isolates each file in
+its own process so the core suite's module mock cannot affect the overlay suite.
+It enables experimental TypeScript transformation (for parameter properties)
+and module mocking, with a test-only resolver for local `.js` imports backed by
+`.ts` source files. The unit-only command needs neither experimental flag.
+Regression tests use unique temporary storage and fake child processes, with no
+paid model requests.
 
 ## Tools
 

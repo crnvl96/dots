@@ -25,6 +25,10 @@
   "engines": {
     "node": ">=24.0.0"
   },
+  "scripts": {
+    "test": "node --experimental-transform-types --experimental-test-module-mocks --import ./test/register-typescript.js --test test/*.test.ts",
+    "test:unit": "node --import ./test/register-typescript.js --test test/normalization.test.ts test/jsonl.test.ts test/models.test.ts test/format.test.ts"
+  },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
     "@earendil-works/pi-coding-agent": ">=0.80.4",
@@ -43,6 +47,9 @@
     "index.ts",
     "core.ts",
     "peek.ts",
+    "runtime",
+    "tools",
+    "ui",
     "README.md",
     "LICENSE"
   ]
