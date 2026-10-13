@@ -28,6 +28,7 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "brew:bat" = "latest"
 "brew:eza" = "latest"
 "brew:fd" = "latest"
+"brew:ffmpeg" = "latest"
 "brew:fzf" = "latest"
 "brew:gh" = "latest"
 "brew:git" = "latest"

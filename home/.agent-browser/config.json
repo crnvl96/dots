@@ -1,0 +1,6 @@
+{
+  "$schema": "https://agent-browser.dev/schema.json",
+  "colorScheme": "dark",
+  "screenshotFormat": "png",
+  "inputMode": "instant"
+}
