@@ -5,19 +5,25 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { createConnection } from "node:net";
-import { pathToFileURL } from "node:url";
+import { pathToFileURL, fileURLToPath } from "node:url";
+
+const cursorWorkerPath = fileURLToPath(new URL("./demo-cursor-worker.mjs", import.meta.url));
 
 const usage = `Usage:
   chrome-debug <url> [--port 9002] [--timeout 15]
   browser-demo <url> [--port 9002] [--session name]
-               [--viewport 1440x900] [--scale 2] [--input-mode human]
+               [--viewport 1440x900] [--scale 2] [--input-mode smooth]
                [--wait selector] [--timeout 15]
+  browser-demo attach --tab <tab-id> [--port 9002] [--session name]
+               [--input-mode smooth] [--wait selector]
   browser-demo screenshot <path.png> --session name [--wait selector] [--full]
-  browser-demo record <path.mp4|path.webm> --session name [--fps 30] [--wait selector]
+  browser-demo record <path.mp4|path.webm> --session name [--fps 60] [--wait selector]
   browser-demo stop --session name
 
-Demo setup uses dark mode, a pinned new tab, and 2x device scale.
-Recording includes the native animated cursor and click ripple.
+Demo setup uses dark mode, a pinned tab, and 2x device scale.
+Fresh launches reuse the startup tab; attach never opens or navigates a tab.
+Find existing tab ids: agent-browser --session name --cdp 9002 tab list
+Recording includes a neon cursor, glow, and double-ring click burst.
 CHROME_DEBUG_EXECUTABLE overrides the Chrome executable.
 CHROME_DEBUG_STATE_DIR overrides ~/.local/state/agent-browser/chrome.
 Timeout is Chrome startup time in seconds; page waits use agent-browser's timeout.`;
@@ -32,8 +38,8 @@ export function parseArgs(command, argv) {
     width: 1440,
     height: 900,
     scale: 2,
-    inputMode: "human",
-    fps: 30,
+    inputMode: "smooth",
+    fps: 60,
   };
   const positional = [];
   const supplied = new Set();
@@ -46,6 +52,7 @@ export function parseArgs(command, argv) {
     "--input-mode",
     "--wait",
     "--fps",
+    "--tab",
   ]);
   const allowed =
     command === "chrome-debug" ? new Set(["--port", "--timeout"]) : new Set([...values, "--full"]);
@@ -96,7 +103,11 @@ export function parseArgs(command, argv) {
     throw new Error("Invalid session name");
   if (options.session === "default")
     throw new Error("Use a named session, not the shared default session");
-  if (command === "browser-demo" && ["screenshot", "record", "stop"].includes(positional[0])) {
+  if (command === "browser-demo" && positional[0] === "attach") {
+    options.action = positional.shift();
+    if (!options.tab || options.tab.startsWith("-"))
+      throw new Error("Attach requires --tab <tab-id>; use agent-browser --cdp <port> tab list");
+  } else if (command === "browser-demo" && ["screenshot", "record", "stop"].includes(positional[0])) {
     options.action = positional.shift();
     if (!options.session) throw new Error("Capture commands require --session name");
     if (options.action !== "stop") {
@@ -120,10 +131,11 @@ export function parseArgs(command, argv) {
     screenshot: ["--session", "--wait", "--full"],
     record: ["--session", "--wait", "--fps"],
     stop: ["--session"],
+    attach: ["--port", "--session", "--tab", "--input-mode", "--wait"],
     open:
       command === "chrome-debug"
         ? ["--port", "--timeout"]
-        : [...values].filter((flag) => flag !== "--fps"),
+        : [...values].filter((flag) => !["--fps", "--tab"].includes(flag)),
   };
   for (const flag of supplied) {
     if (!actionFlags[options.action].includes(flag))
@@ -248,6 +260,15 @@ export async function launchChrome(options, { navigateReuse = true } = {}) {
         throw new Error(`Chrome exited during startup. See ${join(state, "chrome.log")}`);
       const ws = await endpoint(options.port).catch(() => null);
       if (ws) {
+        // CDP can become ready before Chrome creates its startup page. Connecting
+        // agent-browser in that gap creates its own blank page, leaving two tabs.
+        const targets = await fetch(`http://127.0.0.1:${options.port}/json/list`, {
+          signal: AbortSignal.timeout(1000), redirect: "error",
+        }).then((response) => response.json()).catch(() => []);
+        if (!Array.isArray(targets) || !targets.some((target) => target.type === "page")) {
+          await new Promise((done) => setTimeout(done, 100));
+          continue;
+        }
         if (!ownedProcess({ pid }, profile, options.port))
           throw new Error("Chrome process ownership changed during startup");
         await writeFile(ownerPath, JSON.stringify({ pid, endpoint: ws }), { mode: 0o600 });
@@ -301,7 +322,10 @@ export async function prepareDemo(
     run(["session", "id", "--scope", "worktree", "--prefix", `demo-p${options.port}`]);
   if (!/^[a-zA-Z0-9_-]+$/.test(session) || session === "default")
     throw new Error("Could not derive a safe named session");
-  await launch({ ...options, url: "about:blank" }, { navigateReuse: false });
+  // Attach must not launch Chrome, even when the requested endpoint is unavailable.
+  const launched = options.action === "attach"
+    ? null
+    : await launch({ ...options, url: "about:blank" }, { navigateReuse: false });
   const flags = [
     "--session",
     session,
@@ -314,11 +338,30 @@ export async function prepareDemo(
     "dark",
   ];
   const command = (...args) => run([...flags, ...args]);
-  command("connect", String(options.port));
-  command("tab", "new"); // Never navigate a tab chosen implicitly by CDP attachment.
-  command("set", "viewport", String(options.width), String(options.height), String(options.scale));
-  command("set", "media", "dark");
-  command("open", options.url);
+  // A first attachment with --pin-tab creates a fresh tab by design. Discover
+  // without pinning first, then explicitly bind the chosen tab and enable pinning.
+  const discovered = run([
+    ...flags.map((flag) => flag === "--pin-tab" ? "--no-pin-tab" : flag),
+    "tab", "list", "--json",
+  ]);
+  if (options.action === "attach") {
+    command("tab", options.tab); // Explicit selection, never an implicitly chosen tab.
+  } else {
+    if (launched?.reused === false) {
+      // Only a fresh, owned launch has a startup tab we may safely reuse.
+      const result = JSON.parse(discovered);
+      const startup = result.data?.tabs?.find((tab) => tab.url === "about:blank");
+      if (!result.success || !startup?.targetId)
+        throw new Error("Could not identify the fresh Chrome startup tab; refusing to navigate another tab");
+      command("tab", startup.targetId);
+    } else {
+      // Discovery bound an existing tab; now create exactly one isolated demo tab.
+      command("tab", "new"); // Preserve every existing tab on reused Chrome.
+    }
+    command("set", "viewport", String(options.width), String(options.height), String(options.scale));
+    command("set", "media", "dark");
+    command("open", options.url);
+  }
   waitReady(command, options.wait);
   await save(session, { port: options.port, inputMode: options.inputMode });
   return session;
@@ -333,10 +376,43 @@ function waitReady(command, selector) {
   );
 }
 
+export async function startCursor(port, targetId) {
+  const child = spawn(process.execPath, [cursorWorkerPath, String(port), targetId], {
+    detached: true, stdio: ["ignore", "ignore", "ignore", "ipc"],
+  });
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Cursor worker startup timed out"));
+    }, 6000);
+    child.once("error", (error) => { clearTimeout(timer); reject(error); });
+    child.once("exit", () => { clearTimeout(timer); reject(new Error("Cursor worker exited during startup")); });
+    child.once("message", (message) => {
+      clearTimeout(timer);
+      if (!message.ready) {
+        child.kill("SIGTERM");
+        reject(new Error(message.error || "Cursor worker failed"));
+      } else {
+        child.unref();
+        resolve(child.pid);
+      }
+    });
+  });
+}
+
+export function stopCursor(pid, targetId) {
+  if (!alive(pid)) return;
+  const cmd = execFileSync("ps", ["-p", String(pid), "-o", "command="], { encoding: "utf8" });
+  if (!cmd.includes(cursorWorkerPath) || !cmd.includes(targetId))
+    throw new Error("Cursor worker ownership changed; refusing to stop an unrelated process");
+  process.kill(pid, "SIGTERM");
+}
+
 export async function capture(
   options,
   run = runBrowser,
   load = (session) => readJson(demoSessionPath(session)),
+  { start = startCursor, stop = stopCursor, save = saveDemoSession } = {},
 ) {
   const info = JSON.parse(run(["--session", options.session, "session", "info", "--json"]));
   if (!info.success || !info.data?.active)
@@ -367,7 +443,15 @@ export async function capture(
       "dark",
       ...args,
     ]);
-  if (options.action === "stop") return command("record", "stop");
+  if (options.action === "stop") {
+    const result = command("record", "stop");
+    if (settings.cursorPid && settings.cursorTargetId) {
+      await stop(settings.cursorPid, settings.cursorTargetId);
+      const { cursorPid, cursorTargetId, ...connection } = settings;
+      await save(options.session, connection);
+    }
+    return result;
+  }
   await mkdir(dirname(options.path), { recursive: true });
   waitReady(command, options.wait);
   if (options.action === "screenshot") {
@@ -384,7 +468,20 @@ export async function capture(
   } catch {
     throw new Error("Recording requires ffmpeg on PATH. Install it with brew install ffmpeg.");
   }
-  return command("record", "start", options.path, "--cursor", "--fps", String(options.fps));
+  const tabs = JSON.parse(command("tab", "list", "--json"));
+  const active = tabs.data?.tabs?.find((tab) => tab.active);
+  if (!tabs.success || !active?.targetId) throw new Error("Could not identify recording tab");
+  if (settings.cursorPid)
+    throw new Error("A demo recording is already configured; run browser-demo stop first");
+  const cursorPid = await start(settings.port, active.targetId);
+  try {
+    await save(options.session, { ...settings, cursorPid, cursorTargetId: active.targetId });
+    return command("record", "start", options.path, "--cursor", "--fps", String(options.fps));
+  } catch (error) {
+    await stop(cursorPid, active.targetId);
+    await save(options.session, settings);
+    throw error;
+  }
 }
 
 export async function main(command, argv) {
@@ -399,15 +496,17 @@ export async function main(command, argv) {
       `Chrome ${result.reused ? "reused" : "ready"} on 127.0.0.1:${options.port}\nProfile: ${join(result.state, "profile")}`,
     );
     console.log(
-      `Attach: agent-browser --session chrome-p${options.port} --cdp ${options.port} --pin-tab tab list\nKeep --cdp ${options.port} on subsequent agent-browser commands.`,
+      `Attach without a new tab: agent-browser --session chrome-p${options.port} --cdp ${options.port} --no-pin-tab tab list\nThen: browser-demo attach --port ${options.port} --session chrome-p${options.port} --tab <tab-id>\nKeep --cdp ${options.port} on subsequent agent-browser commands.`,
     );
-  } else if (options.action === "open") {
+  } else if (["open", "attach"].includes(options.action)) {
     const session = await prepareDemo(options);
     console.log(
-      `Demo ready: ${session}\nViewport: ${options.width}x${options.height} @ ${options.scale}x; dark; ${options.inputMode} pointer`,
+      options.action === "attach"
+        ? `Demo attached: ${session}; tab ${options.tab}; viewport unchanged; ${options.inputMode} pointer`
+        : `Demo ready: ${session}\nViewport: ${options.width}x${options.height} @ ${options.scale}x; dark; ${options.inputMode} pointer`,
     );
     console.log(
-      `export AGENT_BROWSER_SESSION=${session}\nagent-browser --session ${session} --cdp ${options.port} snapshot -i\nbrowser-demo screenshot ./page.png --session ${session}\nbrowser-demo record ./demo.mp4 --session ${session}\nbrowser-demo stop --session ${session}`,
+      `export AGENT_BROWSER_SESSION=${session}\nexport AGENT_BROWSER_INPUT_MODE=${options.inputMode}\nagent-browser --session ${session} --cdp ${options.port} --pin-tab snapshot -i\nbrowser-demo screenshot ./page.png --session ${session}\nbrowser-demo record ./demo.mp4 --session ${session}\nbrowser-demo stop --session ${session}`,
     );
   } else {
     console.log(await capture(options));

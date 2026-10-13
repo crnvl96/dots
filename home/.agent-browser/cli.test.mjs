@@ -14,7 +14,8 @@ test("defaults and overrides", () => {
   const defaults = parseArgs("browser-demo", [url]);
   assert.equal(defaults.port, 9002);
   assert.equal(defaults.scale, 2);
-  assert.equal(defaults.inputMode, "human");
+  assert.equal(defaults.inputMode, "smooth");
+  assert.equal(defaults.fps, 60);
   const options = parseArgs("browser-demo", [
     url,
     "--port",
@@ -70,6 +71,11 @@ test("invalid arguments fail before launch", () => {
     [url, "--session", "default"],
     [url, "--session", "../bad"],
     [url, "--fps", "60"],
+    [url, "--tab", "t1"],
+    ["attach"],
+    ["attach", url, "--tab", "t1"],
+    ["attach", "--tab", "t1", "--viewport", "1440x900"],
+    ["attach", "--tab", "t1", "--timeout", "15"],
     ["record", "a.mp4"],
     ["record", "a.png", "--session", "demo"],
     ["record", "a.mp4", "--session", "demo", "--fps", "61"],
@@ -89,12 +95,15 @@ function mockBrowser() {
       calls.push(args);
       if (args[0] === "session") return "demo-p9002-worktree";
       if (args.includes("info")) return JSON.stringify({ success: true, data: { active: true } });
+      if (args.includes("list")) return JSON.stringify({ success: true, data: { tabs: [
+        { active: true, targetId: "test-target", tabId: "t1", url: "about:blank" },
+      ] } });
       return "ok";
     },
   };
 }
 
-test("demo launch uses a new tab, then configures before navigation", async () => {
+test("reused Chrome gets a new tab, configured before navigation", async () => {
   const mock = mockBrowser();
   const options = parseArgs("browser-demo", [url, "--session", "demo", "--wait", "#ready"]);
   let launchArgs;
@@ -103,6 +112,7 @@ test("demo launch uses a new tab, then configures before navigation", async () =
     run: mock.run,
     launch: async (...args) => {
       launchArgs = args;
+      return { reused: true };
     },
     save: async (...args) => {
       saved = args;
@@ -111,10 +121,10 @@ test("demo launch uses a new tab, then configures before navigation", async () =
   assert.equal(session, "demo");
   assert.equal(launchArgs[0].url, "about:blank");
   assert.deepEqual(launchArgs[1], { navigateReuse: false });
-  assert.deepEqual(saved, ["demo", { port: 9002, inputMode: "human" }]);
+  assert.deepEqual(saved, ["demo", { port: 9002, inputMode: "smooth" }]);
   const actions = mock.calls.map((args) => args.slice(9));
   assert.deepEqual(actions.slice(0, 5), [
-    ["connect", "9002"],
+    ["tab", "list", "--json"],
     ["tab", "new"],
     ["set", "viewport", "1440", "900", "2"],
     ["set", "media", "dark"],
@@ -123,18 +133,91 @@ test("demo launch uses a new tab, then configures before navigation", async () =
   assert.deepEqual(actions[5], ["wait", "--load", "domcontentloaded"]);
   assert.deepEqual(actions[6], ["wait", "#ready"]);
   assert.match(actions[7][1], /document.fonts.ready/);
-  for (const args of mock.calls)
+  assert.equal(mock.calls[0][6], "--no-pin-tab");
+  for (const args of mock.calls.slice(1))
     assert.deepEqual(args.slice(0, 9), [
       "--session",
       "demo",
       "--cdp",
       "9002",
       "--input-mode",
-      "human",
+      "smooth",
       "--pin-tab",
       "--color-scheme",
       "dark",
     ]);
+});
+
+test("fresh Chrome reuses its explicit startup target without an extra tab", async () => {
+  const mock = mockBrowser();
+  await prepareDemo(parseArgs("browser-demo", [url, "--session", "demo"]), {
+    launch: async () => ({ reused: false }),
+    save: async () => {},
+    run(args) {
+      const result = mock.run(args);
+      if (args.includes("list")) return JSON.stringify({ success: true, data: { tabs: [
+        { targetId: "existing-page", url: "https://example.com" },
+        { targetId: "startup-target", url: "about:blank" },
+      ] } });
+      return result;
+    },
+  });
+  const actions = mock.calls.map((args) => args.slice(9));
+  assert.deepEqual(actions.slice(0, 2), [
+    ["tab", "list", "--json"], ["tab", "startup-target"],
+  ]);
+  assert.equal(actions.some((args) => args[0] === "tab" && args[1] === "new"), false);
+  assert.equal(actions.filter((args) => args[0] === "open").length, 1);
+});
+
+test("fresh Chrome fails closed if its startup target cannot be identified", async () => {
+  const mock = mockBrowser();
+  await assert.rejects(prepareDemo(parseArgs("browser-demo", [url, "--session", "demo"]), {
+    launch: async () => ({ reused: false }),
+    save: async () => { throw new Error("must not save"); },
+    run(args) {
+      mock.run(args);
+      return JSON.stringify({ success: true, data: { tabs: [] } });
+    },
+  }), /startup tab/);
+  assert.equal(mock.calls.some((args) => args.includes("open")), false);
+});
+
+test("attach selects an existing tab without launching, opening, or resizing", async () => {
+  const mock = mockBrowser();
+  let saved;
+  const options = parseArgs("browser-demo", ["attach", "--tab", "t2", "--session", "demo"]);
+  assert.equal(options.action, "attach");
+  const session = await prepareDemo(options, {
+    run: mock.run,
+    launch: async () => { throw new Error("attach must not launch Chrome"); },
+    save: async (...args) => { saved = args; },
+  });
+  assert.equal(session, "demo");
+  assert.deepEqual(saved, ["demo", { port: 9002, inputMode: "smooth" }]);
+  const actions = mock.calls.map((args) => args.slice(9));
+  assert.deepEqual(actions[0], ["tab", "list", "--json"]);
+  assert.equal(mock.calls[0][6], "--no-pin-tab");
+  assert.deepEqual(actions[1], ["tab", "t2"]);
+  assert.equal(mock.calls[1][6], "--pin-tab");
+  assert.equal(actions.some((args) => ["open", "set"].includes(args[0])), false);
+  assert.equal(actions.some((args) => args[0] === "tab" && args[1] === "new"), false);
+});
+
+test("attach failure never falls back to opening a tab", async () => {
+  const mock = mockBrowser();
+  await assert.rejects(prepareDemo(
+    parseArgs("browser-demo", ["attach", "--tab", "missing", "--session", "demo"]), {
+      run(args) {
+        mock.run(args);
+        if (args.at(-1) === "missing") throw new Error("Unknown tab");
+        return "ok";
+      },
+      launch: async () => { throw new Error("must not launch"); },
+      save: async () => { throw new Error("must not save"); },
+    },
+  ), /Unknown tab/);
+  assert.equal(mock.calls.length, 2);
 });
 
 test("automatic session is scoped to worktree and port", async () => {
@@ -260,6 +343,73 @@ test("screenshot helper preserves paths, waits, and requests PNG", async () => {
   }
 });
 
+test("recording installs neon effects on current and future documents at 60 fps", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "browser-record-test-"));
+  try {
+    const mock = mockBrowser();
+    const path = join(dir, "demo.mp4");
+    let saved;
+    await capture(parseArgs("browser-demo", ["record", path, "--session", "demo"]),
+      mock.run, async () => ({ port: 9002, inputMode: "smooth" }), {
+        start: async (port, targetId) => {
+          assert.equal(port, 9002);
+          assert.equal(targetId, "test-target");
+          return 123;
+        },
+        save: async (...args) => { saved = args; },
+      });
+    assert.deepEqual(saved, ["demo", {
+      port: 9002, inputMode: "smooth", cursorPid: 123, cursorTargetId: "test-target",
+    }]);
+    const source = await readFile(new URL("./demo-cursor.js", import.meta.url), "utf8");
+    assert.match(source, /MutationObserver/);
+    assert.match(source, /event.isTrusted/);
+    assert.match(source, /ring second/);
+    assert.deepEqual(mock.calls.at(-1).slice(9), [
+      "record", "start", resolve(path), "--cursor", "--fps", "60",
+    ]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("stop cleans up its cursor worker and saved recording metadata", async () => {
+  const mock = mockBrowser();
+  let stopped, saved;
+  await capture(parseArgs("browser-demo", ["stop", "--session", "demo"]), mock.run,
+    async () => ({ port: 9002, inputMode: "smooth", cursorPid: 123, cursorTargetId: "test-target" }), {
+      stop: async (...args) => { stopped = args; },
+      save: async (...args) => { saved = args; },
+    });
+  assert.deepEqual(stopped, [123, "test-target"]);
+  assert.deepEqual(saved, ["demo", { port: 9002, inputMode: "smooth" }]);
+});
+
+test("failed recording start cleans up its cursor worker", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "browser-record-failure-"));
+  try {
+    const mock = mockBrowser();
+    let stopped;
+    const saved = [];
+    await assert.rejects(capture(
+      parseArgs("browser-demo", ["record", join(dir, "test.mp4"), "--session", "demo"]),
+      (args) => {
+        if (args.includes("record") && args.includes("start")) throw new Error("record failed");
+        return mock.run(args);
+      },
+      async () => ({ port: 9002, inputMode: "smooth" }), {
+        start: async () => 123,
+        stop: async (...args) => { stopped = args; },
+        save: async (...args) => { saved.push(args); },
+      },
+    ), /record failed/);
+    assert.deepEqual(stopped, [123, "test-target"]);
+    assert.deepEqual(saved.at(-1), ["demo", { port: 9002, inputMode: "smooth" }]);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("capture refuses an inactive session without launching a browser", async () => {
   const calls = [];
   const options = parseArgs("browser-demo", ["stop", "--session", "missing"]);
@@ -325,7 +475,7 @@ async function withFakeChrome(callback) {
     `import {createServer} from 'node:http';
 const port = Number(process.argv.find(a=>a.startsWith('--remote-debugging-port=')).split('=')[1]);
 if (process.env.FAKE_CHROME_TIMEOUT) { setInterval(()=>{},1000); }
-else { createServer((q,r)=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify({webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/test'}));}).listen(port,'127.0.0.1'); }
+else { createServer((q,r)=>{r.setHeader('Content-Type','application/json');r.end(JSON.stringify(q.url === '/json/list' ? [{type:'page',id:'startup',url:'about:blank'}] : {webSocketDebuggerUrl:'ws://127.0.0.1:'+port+'/devtools/browser/test'}));}).listen(port,'127.0.0.1'); }
 `,
   );
   await writeFile(executable, `#!/bin/sh\nexec '${process.execPath}' '${fixture}' "$@"\n`, {
