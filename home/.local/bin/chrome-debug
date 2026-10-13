@@ -1,4 +1,0 @@
-#!/bin/sh
-set -eu
-home=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
-exec node "$home/.agent-browser/cli.mjs" chrome-debug "$@"
