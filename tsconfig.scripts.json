@@ -10,5 +10,5 @@
     "moduleResolution": "NodeNext",
     "types": ["node"]
   },
-  "include": ["scripts/**/*.mjs"]
+  "include": ["scripts/**/*"]
 }

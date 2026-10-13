@@ -9,87 +9,161 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format Neovim Lua, Pi extensions, repository JSON, TOML and Markdown, JavaScript scripts, and shell scripts"
-depends = ["nvim:format", "pi:format", "json:format", "toml:format", "docs:format", "scripts:format", "shell:format"]
+description = "Format all managed packages and repository tooling"
+depends = [
+  "neovim:format",
+  "pi:format",
+  "agents:format",
+  "claude:format",
+  "mise:format",
+  "scripts:format",
+  "repo:format",
+]
+
+[tasks."format:check"]
+description = "Check formatting for all managed packages and repository tooling without writing files"
+depends = [
+  "neovim:format:check",
+  "pi:format:check",
+  "agents:format:check",
+  "claude:format:check",
+  "mise:format:check",
+  "scripts:format:check",
+  "repo:format:check",
+]
 
 [tasks.lint]
-description = "Lint Pi extensions, JavaScript scripts, and shell scripts"
-depends = ["pi:lint", "scripts:lint", "shell:lint"]
+description = "Lint Pi extensions, repository scripts, and Claude shell scripts"
+depends = ["pi:lint", "scripts:lint", "claude:lint"]
 
 [tasks.typecheck]
-description = "Typecheck Pi extensions and JavaScript scripts"
+description = "Typecheck Pi extensions and repository scripts"
 depends = ["pi:typecheck", "scripts:typecheck"]
 
-[tasks."nvim:format"]
-description = "Format the Neovim Lua configuration with StyLua"
+[tasks.check]
+description = "Run all available package checks"
+depends = ["neovim:check", "pi:check", "agents:check", "claude:check", "mise:check", "scripts:check", "repo:check"]
+
+[tasks."neovim:check"]
+description = "Check Neovim formatting"
+depends = ["neovim:format:check"]
+
+[tasks."pi:check"]
+description = "Check Pi formatting, lint, and types"
+depends = ["pi:format:check", "pi:lint", "pi:typecheck"]
+
+[tasks."agents:check"]
+description = "Check shared agent skill formatting"
+depends = ["agents:format:check"]
+
+[tasks."claude:check"]
+description = "Check Claude formatting, shell lint, and shell syntax"
+depends = ["claude:format:check", "claude:lint", "claude:syntax"]
+
+[tasks."mise:check"]
+description = "Check mise configuration formatting"
+depends = ["mise:format:check"]
+
+[tasks."scripts:check"]
+description = "Check repository script formatting, lint, types, and tests"
+depends = ["scripts:format:check", "scripts:lint", "scripts:typecheck", "scripts:test"]
+
+[tasks."repo:check"]
+description = "Check shared root formatting and Git whitespace"
 dir = "{{config_root}}"
-run = "stylua --verify --config-path .stylua.toml home/.config/nvim"
+depends = ["repo:format:check"]
+run = "git diff --check"
+
+[tasks."neovim:format"]
+description = "Format Neovim Lua and Oxfmt-supported files, excluding the generated package lockfile"
+dir = "{{config_root}}"
+run = [
+  "stylua --verify --allow-hidden --config-path .stylua.toml home/.config/nvim",
+  "oxfmt --write .stylua.toml home/.config/nvim '!home/.config/nvim/nvim-pack-lock.json'",
+]
+
+[tasks."neovim:format:check"]
+description = "Check Neovim formatting without writing files; exclude the generated package lockfile"
+dir = "{{config_root}}"
+run = [
+  "stylua --check --verify --allow-hidden --config-path .stylua.toml home/.config/nvim",
+  "oxfmt --check .stylua.toml home/.config/nvim '!home/.config/nvim/nvim-pack-lock.json'",
+]
 
 [tasks."pi:format"]
-description = "Format Pi TypeScript extensions"
+description = "Format Pi configuration, extensions, and documentation"
 dir = "{{config_root}}"
-run = "oxfmt --write 'home/.pi/agent/extensions/*.ts'"
+run = "oxfmt --write home/.pi tsconfig.json"
 
-[tasks."json:format"]
-description = "Format repository JSON, including hidden directories, except generated lockfiles"
+[tasks."pi:format:check"]
+description = "Check Pi formatting without writing files"
 dir = "{{config_root}}"
-run = "oxfmt --write '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-pack-lock.json'"
-
-[tasks."json:format:check"]
-description = "Check repository JSON formatting without writing files; exclude generated lockfiles"
-dir = "{{config_root}}"
-run = "oxfmt --check '**/*.json' '!package-lock.json' '!home/.config/nvim/nvim-pack-lock.json'"
-
-[tasks."toml:format"]
-description = "Format all repository TOML, including hidden files and directories, with Oxfmt"
-dir = "{{config_root}}"
-run = "oxfmt --write '**/*.toml'"
-
-[tasks."toml:format:check"]
-description = "Check repository TOML formatting without writing files"
-dir = "{{config_root}}"
-run = "oxfmt --check '**/*.toml'"
-
-[tasks."shell:format"]
-description = "Format the Claude status-line Bash script with shfmt and two-space indentation"
-dir = "{{config_root}}"
-run = "shfmt -ln bash -i 2 -w home/.claude/statusline.sh"
-
-[tasks."shell:format:check"]
-description = "Check Bash script formatting without writing files"
-dir = "{{config_root}}"
-run = "shfmt -ln bash -i 2 -d home/.claude/statusline.sh"
-
-[tasks."shell:lint"]
-description = "Lint the Claude status-line Bash script with ShellCheck; reject all findings"
-dir = "{{config_root}}"
-run = "shellcheck --shell=bash home/.claude/statusline.sh"
-
-[tasks."shell:syntax"]
-description = "Validate Bash script syntax with macOS system Bash without executing it"
-dir = "{{config_root}}"
-run = "/bin/bash -n home/.claude/statusline.sh"
+run = "oxfmt --check home/.pi tsconfig.json"
 
 [tasks."pi:lint"]
-description = "Lint Pi extensions"
+description = "Lint all JavaScript and TypeScript files belonging to Pi"
 dir = "{{config_root}}"
-run = "oxlint home/.pi/agent/extensions/*.ts"
+run = "oxlint home/.pi"
 
 [tasks."pi:typecheck"]
-description = "Typecheck Pi extensions without emitting files"
+description = "Typecheck Pi TypeScript files without emitting files"
 dir = "{{config_root}}"
-depends = ["pi:deps"]
+depends = ["repo:deps"]
 run = "tsc --project tsconfig.json"
 
-[tasks."scripts:format"]
-description = "Format JavaScript scripts and tests with Oxfmt"
+[tasks."agents:format"]
+description = "Format shared agent skills and their Oxfmt-supported files"
 dir = "{{config_root}}"
-run = "oxfmt --write 'scripts/**/*.mjs'"
+run = "oxfmt --write home/.agents"
+
+[tasks."agents:format:check"]
+description = "Check shared agent skill formatting without writing files"
+dir = "{{config_root}}"
+run = "oxfmt --check home/.agents"
+
+[tasks."claude:format"]
+description = "Format Claude configuration and shell scripts; shared skills belong to agents"
+dir = "{{config_root}}"
+run = ["oxfmt --write home/.claude '!home/.claude/skills/**'", "shfmt -ln bash -i 2 -w home/.claude"]
+
+[tasks."claude:format:check"]
+description = "Check Claude configuration and shell script formatting without writing files"
+dir = "{{config_root}}"
+run = ["oxfmt --check home/.claude '!home/.claude/skills/**'", "shfmt -ln bash -i 2 -d home/.claude"]
+
+[tasks."claude:lint"]
+description = "Lint Claude Bash scripts with ShellCheck; reject all findings"
+dir = "{{config_root}}"
+run = "find home/.claude -type f -name '*.sh' -exec shellcheck --shell=bash {} +"
+
+[tasks."claude:syntax"]
+description = "Validate Claude Bash script syntax with macOS system Bash without executing scripts"
+dir = "{{config_root}}"
+run = """
+find home/.claude -type f -name '*.sh' -exec /bin/bash -c '
+  for script do /bin/bash -n "$script" || exit; done
+' bash {} +
+"""
+
+[tasks."mise:format"]
+description = "Format repository and home mise configuration"
+dir = "{{config_root}}"
+run = "oxfmt --write mise.toml home/.config/mise"
+
+[tasks."mise:format:check"]
+description = "Check mise configuration formatting without writing files"
+dir = "{{config_root}}"
+run = "oxfmt --check mise.toml home/.config/mise"
+
+[tasks."scripts:format"]
+description = "Format repository scripts, tests, documentation, and TypeScript configuration"
+dir = "{{config_root}}"
+run = "oxfmt --write scripts tsconfig.scripts.json"
 
 [tasks."scripts:format:check"]
-description = "Check JavaScript script formatting without writing files"
+description = "Check repository script formatting without writing files"
 dir = "{{config_root}}"
-run = "oxfmt --check 'scripts/**/*.mjs'"
+run = "oxfmt --check scripts tsconfig.scripts.json"
 
 [tasks."scripts:lint"]
 description = "Lint JavaScript scripts and tests with Oxlint"
@@ -97,28 +171,38 @@ dir = "{{config_root}}"
 run = "oxlint scripts"
 
 [tasks."scripts:typecheck"]
-description = "Typecheck JavaScript scripts and tests without emitting files"
+description = "Typecheck repository JavaScript and TypeScript files without emitting files"
 dir = "{{config_root}}"
-depends = ["pi:deps"]
+depends = ["repo:deps"]
 run = "tsc --project tsconfig.scripts.json"
 
 [tasks."scripts:test"]
 description = "Run all JavaScript script tests with Node's test runner"
 dir = "{{config_root}}"
-depends = ["pi:deps"]
+depends = ["repo:deps"]
 run = "node --test 'scripts/**/*.test.mjs'"
 
-[tasks."docs:format"]
-description = "Format all repository Markdown, including hidden directories, with Oxfmt"
+# Only root-level metadata belongs to repo; package-specific configuration is handled above.
+# Use find rather than Oxfmt globs to avoid matching files inside package directories.
+[tasks."repo:format"]
+description = "Format shared root configuration and documentation, excluding the generated npm lockfile"
 dir = "{{config_root}}"
-run = "oxfmt --write '**/*.md'"
+run = """
+find . -maxdepth 1 -type f \\( -name '*.json' -o -name '*.toml' -o -name '*.md' \\) \\
+  ! -name package-lock.json ! -name mise.toml ! -name .stylua.toml \\
+  ! -name tsconfig.json ! -name tsconfig.scripts.json -exec oxfmt --write {} +
+"""
 
-[tasks."docs:format:check"]
-description = "Check repository Markdown formatting without writing files"
+[tasks."repo:format:check"]
+description = "Check shared root configuration and documentation formatting without writing files"
 dir = "{{config_root}}"
-run = "oxfmt --check '**/*.md'"
+run = """
+find . -maxdepth 1 -type f \\( -name '*.json' -o -name '*.toml' -o -name '*.md' \\) \\
+  ! -name package-lock.json ! -name mise.toml ! -name .stylua.toml \\
+  ! -name tsconfig.json ! -name tsconfig.scripts.json -exec oxfmt --check {} +
+"""
 
-[tasks."pi:deps"]
+[tasks."repo:deps"]
 description = "Install locked repository development dependencies"
 dir = "{{config_root}}"
 run = "npm ci --include=dev"
@@ -147,7 +231,7 @@ run = ["mise bootstrap --only dotfiles --dry-run", "mise bootstrap --only dotfil
 [tasks."bootstrap:tools"]
 description = "Preview and bootstrap globally declared tools, then install development dependencies"
 dir = "{{config_root}}"
-run = ["mise bootstrap --only tools --dry-run", "mise bootstrap --only tools --yes", { task = "pi:deps" }]
+run = ["mise bootstrap --only tools --dry-run", "mise bootstrap --only tools --yes", { task = "repo:deps" }]
 
 [tasks."bootstrap:brew"]
 description = "Preview and bootstrap globally declared Homebrew packages"
