@@ -28,5 +28,10 @@
   "autoContinueAtUsageLimit": false,
   "fileCheckpointingEnabled": false,
   "inputNeededNotifEnabled": false,
-  "agentPushNotifEnabled": false
+  "agentPushNotifEnabled": false,
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
+  }
 }

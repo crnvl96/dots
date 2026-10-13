@@ -1,7 +1,7 @@
 # Ghostty configuration
 theme = light:Rose Pine Dawn,dark:Rose Pine
 font-family = Berkeley Mono
-font-size = 12
+font-size = 13
 window-theme = auto
 
 macos-option-as-alt = true
