@@ -1,9 +1,10 @@
-import { beforeAll, describe, expect, test } from "bun:test";
+import { before, describe, test } from "node:test";
+import assert from "node:assert/strict";
 import { initTheme, type ToolExecutionComponent } from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
 import { SubagentPeekOverlay } from "./peek.js";
 
-beforeAll(() => initTheme("dark", false));
+before(() => initTheme("dark", false));
 
 function createTool(name: string, args: Record<string, unknown>): ToolExecutionComponent {
   return SubagentPeekOverlay.prototype["createToolComponent"].call(
@@ -19,15 +20,14 @@ function renderTool(component: ToolExecutionComponent): string {
 }
 
 describe("peek tool rendering", () => {
-  test.each(["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"])(
-    "passes an explicit built-in definition for %s",
-    (name) => {
+  for (const name of ["bash", "edit", "find", "grep", "ls", "powershell", "read", "write"]) {
+    test(`passes an explicit built-in definition for ${name}`, () => {
       const component = createTool(name, {});
-      expect(component["toolDefinition"]?.name).toBe(name);
-      expect(component["toolDefinition"]?.renderCall).toBeFunction();
-      expect(component["toolDefinition"]?.renderResult).toBeFunction();
-    },
-  );
+      assert.strictEqual(component["toolDefinition"]?.name, name);
+      assert.strictEqual(typeof component["toolDefinition"]?.renderCall, "function");
+      assert.strictEqual(typeof component["toolDefinition"]?.renderResult, "function");
+    });
+  }
 
   test("read shows only its compact header instead of raw arguments and the full file", () => {
     const component = createTool("read", { path: "src/catalog.rs", offset: 100, limit: 45 });
@@ -37,10 +37,10 @@ describe("peek tool rendering", () => {
     });
 
     const text = renderTool(component);
-    expect(text).toContain("src/catalog.rs");
-    expect(text).not.toContain('"path":');
-    expect(text).toContain("100-144");
-    expect(text).not.toContain("file_line_");
+    assert.ok(text.includes("src/catalog.rs"));
+    assert.ok(!text.includes('"path":'));
+    assert.ok(text.includes("100-144"));
+    assert.ok(!text.includes("file_line_"));
   });
 
   test("bash output stays collapsed while streaming and after completion", () => {
@@ -53,11 +53,11 @@ describe("peek tool rendering", () => {
     for (const isPartial of [true, false]) {
       component.updateResult(result, isPartial);
       const text = renderTool(component);
-      expect(text).toContain("printf output");
-      expect(text).not.toContain('"command":');
-      expect(text).not.toContain("output_line_1");
-      expect(text).toContain("output_line_30");
-      expect(text).toContain("25 earlier lines");
+      assert.ok(text.includes("printf output"));
+      assert.ok(!text.includes('"command":'));
+      assert.ok(!text.includes("output_line_1"));
+      assert.ok(text.includes("output_line_30"));
+      assert.ok(text.includes("25 earlier lines"));
     }
   });
 });

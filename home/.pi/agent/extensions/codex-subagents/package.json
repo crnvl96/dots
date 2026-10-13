@@ -23,7 +23,7 @@
   },
   "homepage": "https://github.com/ogulcancelik/pi-extensions/tree/main/packages/pi-codex-subagents#readme",
   "engines": {
-    "node": ">=22.19.0"
+    "node": ">=24.0.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",

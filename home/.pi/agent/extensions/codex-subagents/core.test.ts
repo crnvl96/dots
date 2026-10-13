@@ -1,4 +1,5 @@
-import { afterAll, describe, expect, mock, test } from "bun:test";
+import { after, describe, mock, test } from "node:test";
+import assert from "node:assert/strict";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as os from "node:os";
@@ -6,16 +7,25 @@ import * as path from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 
 const TEST_AGENT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pi-codex-subagents-tests-"));
-afterAll(() => fs.rmSync(TEST_AGENT_DIR, { recursive: true, force: true }));
-const FAKE_RPC_CHILD = path.join(import.meta.dir, "test", "fake-rpc-child.js");
-process.env.PI_SUBAGENT_TEMP_DIR = path.join(TEST_AGENT_DIR, "temp");
+// Unix-domain socket paths have a small platform-dependent byte limit, so keep this root short.
+const TEST_TEMP_DIR = process.platform === "win32"
+  ? fs.mkdtempSync(path.join(os.tmpdir(), "pi-"))
+  : fs.mkdtempSync("/tmp/pi-");
+after(() => {
+  fs.rmSync(TEST_AGENT_DIR, { recursive: true, force: true });
+  fs.rmSync(TEST_TEMP_DIR, { recursive: true, force: true });
+});
+const FAKE_RPC_CHILD = path.join(import.meta.dirname, "test", "fake-rpc-child.js");
+process.env.PI_SUBAGENT_TEMP_DIR = TEST_TEMP_DIR;
 
 const codingAgent = await import("@earendil-works/pi-coding-agent");
-mock.module("@earendil-works/pi-coding-agent", () => ({
-  ...codingAgent,
-  CONFIG_DIR_NAME: ".pi",
-  getAgentDir: () => TEST_AGENT_DIR,
-}));
+mock.module("@earendil-works/pi-coding-agent", {
+  namedExports: {
+    ...codingAgent,
+    CONFIG_DIR_NAME: ".pi",
+    getAgentDir: () => TEST_AGENT_DIR,
+  },
+});
 
 const {
   AgentManager,
@@ -36,7 +46,7 @@ const { formatAgentSpecLines } = await import("./peek.js");
 
 
 test("formats the resolved subagent model and thinking for the detail overlay", () => {
-  expect(formatAgentSpecLines({ provider: "openai-codex", modelId: "gpt-5.5", thinking: "high" })).toEqual([
+  assert.deepStrictEqual(formatAgentSpecLines({ provider: "openai-codex", modelId: "gpt-5.5", thinking: "high" }), [
     "Model: openai-codex/gpt-5.5",
     "Thinking: high",
   ]);
@@ -58,22 +68,22 @@ describe("RPC streaming", () => {
 
     stream.update({ type: "thinking_start", contentIndex: 0 });
     stream.update({ type: "thinking_delta", contentIndex: 0, delta: "checking" });
-    expect(stream.status).toBe("thinking");
-    expect(stream.message?.content[0]).toMatchObject({ type: "thinking", thinking: "checking" });
+    assert.strictEqual(stream.status, "thinking");
+    assert.partialDeepStrictEqual(stream.message?.content[0], { type: "thinking", thinking: "checking" });
 
     stream.update({ type: "toolcall_start", contentIndex: 1 });
     stream.update({ type: "toolcall_delta", contentIndex: 1, delta: '{"path":"src' });
     stream.update({ type: "toolcall_delta", contentIndex: 1, delta: '/ui.rs"}' });
-    expect(stream.status).toBe("calling");
-    expect(stream.message?.content[0]).toMatchObject({ type: "thinking", thinking: "checking" });
-    expect(stream.message?.content[1]).toMatchObject({ type: "toolCall", arguments: { path: "src/ui.rs" } });
+    assert.strictEqual(stream.status, "calling");
+    assert.partialDeepStrictEqual(stream.message?.content[0], { type: "thinking", thinking: "checking" });
+    assert.partialDeepStrictEqual(stream.message?.content[1], { type: "toolCall", arguments: { path: "src/ui.rs" } });
 
     stream.update({
       type: "toolcall_end",
       contentIndex: 1,
       toolCall: { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/ui.rs" } },
     });
-    expect(stream.message?.content[1]).toEqual({ type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/ui.rs" } });
+    assert.deepStrictEqual(stream.message?.content[1], { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/ui.rs" } });
   });
 });
 
@@ -82,22 +92,22 @@ describe("RPC framing", () => {
     const error = Object.assign(new Error(`Unknown system error -${os.constants.errno.EDQUOT}, write`), {
       errno: -os.constants.errno.EDQUOT,
     });
-    expect(formatAgentError(error)).toContain("Disk quota exceeded (EDQUOT).");
+    assert.ok(formatAgentError(error).includes("Disk quota exceeded (EDQUOT)."));
   });
 
   test("splits only on LF and preserves Unicode line separators", () => {
     const decoder = new RpcJsonlDecoder();
     const payload = JSON.stringify({ text: "before\u2028after" });
-    expect(decoder.push(Buffer.from(payload.slice(0, 7)))).toEqual([]);
-    expect(decoder.push(Buffer.from(`${payload.slice(7)}\n`))).toEqual([payload]);
-    expect(decoder.end()).toEqual([]);
+    assert.deepStrictEqual(decoder.push(Buffer.from(payload.slice(0, 7))), []);
+    assert.deepStrictEqual(decoder.push(Buffer.from(`${payload.slice(7)}\n`)), [payload]);
+    assert.deepStrictEqual(decoder.end(), []);
   });
 });
 
 describe("session-scoped identities", () => {
   test("separates parent sessions and formerly colliding task names", () => {
-    expect(parentScopeKey("parent-a")).not.toBe(parentScopeKey("parent-b"));
-    expect(taskStorageKey("review/api")).not.toBe(taskStorageKey("review__api"));
+    assert.notStrictEqual(parentScopeKey("parent-a"), parentScopeKey("parent-b"));
+    assert.notStrictEqual(taskStorageKey("review/api"), taskStorageKey("review__api"));
   });
 });
 
@@ -112,7 +122,7 @@ extensions: @scope/tools, ~/.pi/helper.ts
 skills: web-investigate
 ---
 Review the requested files.`, "fallback");
-    expect(definition).toMatchObject({
+    assert.partialDeepStrictEqual(definition, {
       name: "reviewer",
       provider: "openai-codex",
       model: "gpt-5.6-sol",
@@ -131,13 +141,13 @@ describe("run storage", () => {
 
   test("uses persistent package storage by default", () => {
     fs.rmSync(configFile, { force: true });
-    expect(getRunsDir()).toBe(path.join(packageDir, "runs"));
+    assert.strictEqual(getRunsDir(), path.join(packageDir, "runs"));
   });
 
   test("loads the model response timeout from package configuration", () => {
     fs.mkdirSync(packageDir, { recursive: true });
     fs.writeFileSync(configFile, JSON.stringify({ modelResponseTimeoutMs: 1234 }));
-    expect(loadSubagentConfig().modelResponseTimeoutMs).toBe(1234);
+    assert.strictEqual(loadSubagentConfig().modelResponseTimeoutMs, 1234);
     fs.rmSync(configFile, { force: true });
   });
 
@@ -157,7 +167,7 @@ describe("run storage", () => {
       updatedAt: Date.now(),
     }));
 
-    expect(getAgent("legacy", parentSessionId)).toMatchObject({ id, status: "completed", finalResponse: "legacy response" });
+    assert.partialDeepStrictEqual(getAgent("legacy", parentSessionId), { id, status: "completed", finalResponse: "legacy response" });
     fs.rmSync(legacyScope, { recursive: true, force: true });
   });
 
@@ -183,7 +193,7 @@ describe("run storage", () => {
 
     const manager = new AgentManager();
     try {
-      expect(manager.listAgents(undefined, parentSessionId).map((agent) => agent.agent_name)).toEqual(["/newer", "/older"]);
+      assert.deepStrictEqual(manager.listAgents(undefined, parentSessionId).map((agent) => agent.agent_name), ["/newer", "/older"]);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -201,8 +211,8 @@ describe("run storage", () => {
     const manager = new AgentManager();
     try {
       await manager.ready();
-      expect(manager.listAgents(undefined, parentSessionId)).toEqual([]);
-      expect(fs.existsSync(malformed)).toBe(true);
+      assert.deepStrictEqual(manager.listAgents(undefined, parentSessionId), []);
+      assert.strictEqual(fs.existsSync(malformed), true);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -255,20 +265,20 @@ describe("run storage", () => {
       fs.writeFileSync(path.join(unrelatedScope, "unrelated.txt"), "keep");
 
       new AgentManager();
-      expect(fs.existsSync(expiredInfo)).toBe(false);
-      expect(fs.existsSync(activeInfo)).toBe(true);
-      expect(fs.existsSync(unrelatedAgentFile)).toBe(true);
-      expect(fs.existsSync(staleLock)).toBe(false);
-      expect(fs.existsSync(liveOwnerLock)).toBe(true);
-      expect(fs.existsSync(expiredOutput)).toBe(false);
-      expect(fs.existsSync(path.join(outputs, "unrelated.txt"))).toBe(true);
-      expect(fs.existsSync(path.join(unrelatedScope, "unrelated.txt"))).toBe(true);
+      assert.strictEqual(fs.existsSync(expiredInfo), false);
+      assert.strictEqual(fs.existsSync(activeInfo), true);
+      assert.strictEqual(fs.existsSync(unrelatedAgentFile), true);
+      assert.strictEqual(fs.existsSync(staleLock), false);
+      assert.strictEqual(fs.existsSync(liveOwnerLock), true);
+      assert.strictEqual(fs.existsSync(expiredOutput), false);
+      assert.strictEqual(fs.existsSync(path.join(outputs, "unrelated.txt")), true);
+      assert.strictEqual(fs.existsSync(path.join(unrelatedScope, "unrelated.txt")), true);
 
       fs.writeFileSync(configFile, JSON.stringify({ storageDir: fixtureDir, retentionDays: 0 }));
       fs.writeFileSync(expiredInfo, "{}");
       fs.utimesSync(expiredInfo, oldTime, oldTime);
       new AgentManager();
-      expect(fs.existsSync(expiredInfo)).toBe(true);
+      assert.strictEqual(fs.existsSync(expiredInfo), true);
     } finally {
       fs.rmSync(fixtureDir, { recursive: true, force: true });
       fs.rmSync(activeMarker, { force: true });
@@ -341,15 +351,15 @@ describe("spawn model and thinking resolution", () => {
     };
     const callerModel = { model: { provider: "openai", modelId: "gpt-5" } };
     try {
-      expect(await spawn("inherited", {})).toMatchObject({ model: "test:fake", thinking: "low" });
-      expect(await spawn("caller-model", callerModel)).toMatchObject({ model: "openai:gpt-5", thinking: "low" });
-      expect(await spawn("caller-thinking", { thinking: "max" })).toMatchObject({ model: "test:fake", thinking: "max" });
-      expect(await spawn("template", { agent_type: "routed" })).toMatchObject({ model: "template-provider:template-model", thinking: "medium" });
-      expect(await spawn("caller-beats-template", { agent_type: "routed", ...callerModel, thinking: "xhigh" })).toMatchObject({ model: "openai:gpt-5", thinking: "xhigh" });
+      assert.partialDeepStrictEqual(await spawn("inherited", {}), { model: "test:fake", thinking: "low" });
+      assert.partialDeepStrictEqual(await spawn("caller-model", callerModel), { model: "openai:gpt-5", thinking: "low" });
+      assert.partialDeepStrictEqual(await spawn("caller-thinking", { thinking: "max" }), { model: "test:fake", thinking: "max" });
+      assert.partialDeepStrictEqual(await spawn("template", { agent_type: "routed" }), { model: "template-provider:template-model", thinking: "medium" });
+      assert.partialDeepStrictEqual(await spawn("caller-beats-template", { agent_type: "routed", ...callerModel, thinking: "xhigh" }), { model: "openai:gpt-5", thinking: "xhigh" });
       // No level requested anywhere, not even by the parent, falls back to the package default.
       await manager.spawnAgent(spawnParams(parentSessionId, "default-thinking", "work"));
-      expect(manager.getAgentInfo("default-thinking", parentSessionId)).toMatchObject({ model: "test:fake", thinking: "high" });
-      await expect(spawn("missing", { agent_type: "absent" })).rejects.toThrow("Agent template not found");
+      assert.partialDeepStrictEqual(manager.getAgentInfo("default-thinking", parentSessionId), { model: "test:fake", thinking: "high" });
+      await assert.rejects(spawn("missing", { agent_type: "absent" }), /Agent template not found/);
     } finally {
       await manager.shutdown();
       fs.rmSync(templateFile, { force: true });
@@ -359,7 +369,7 @@ describe("spawn model and thinking resolution", () => {
 });
 
 const ROUTING_CONFIG_FILE = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
-const PROVIDER_AGENTS = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../pi-codex-subagents/config.json"), "utf8")).providerAgents;
+const PROVIDER_AGENTS = JSON.parse(fs.readFileSync(path.join(import.meta.dirname, "../../pi-codex-subagents/config.json"), "utf8")).providerAgents;
 
 function installProviderRoutes() {
   fs.mkdirSync(path.dirname(ROUTING_CONFIG_FILE), { recursive: true });
@@ -374,7 +384,7 @@ describe("provider-scoped tiers", () => {
       high: { model: "claude-opus-5-5", thinking: "high" },
       max: { model: "claude-fable-5-1", thinking: "high" },
     };
-    expect(PROVIDER_AGENTS).toEqual({
+    assert.deepStrictEqual(PROVIDER_AGENTS, {
       openai: {
         light: { model: "gpt-6-luna", thinking: "max" },
         medium: { model: "gpt-5.6-terra", thinking: "high" },
@@ -391,26 +401,26 @@ describe("provider-scoped tiers", () => {
     process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
     const manager = new AgentManager();
     try {
-      expect(listAgentDefinitions().map((tier) => tier.name)).toEqual(["light", "medium", "high", "max"]);
+      assert.deepStrictEqual(listAgentDefinitions().map((tier) => tier.name), ["light", "medium", "high", "max"]);
       for (const [provider, tiers] of Object.entries(PROVIDER_AGENTS)) {
-        expect(listAgentDefinitions(provider)).toHaveLength(4);
+        assert.strictEqual(listAgentDefinitions(provider).length, 4);
         for (const [tier, route] of Object.entries(tiers as any)) {
           const expected = route as any;
           const parent = `tiers-${provider}`;
           await manager.spawnAgent({ ...spawnParams(parent, tier, "hold"), agent_type: tier, inheritedProvider: provider, inheritedThinking: "off" });
           const info = manager.getAgentInfo(tier, parent);
-          expect(info).toMatchObject({ provider, modelId: expected.model, thinking: expected.thinking });
+          assert.partialDeepStrictEqual(info, { provider, modelId: expected.model, thinking: expected.thinking });
           const start = JSON.parse(fs.readFileSync(info.sessionFile, "utf8").split("\n")[0]);
           for (const [flag, value] of [["--provider", provider], ["--model", expected.model], ["--thinking", expected.thinking]]) {
-            expect(start.args[start.args.indexOf(flag) + 1]).toBe(value);
+            assert.strictEqual(start.args[start.args.indexOf(flag) + 1], value);
           }
         }
       }
-      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "generic", "hold"), inheritedProvider: "openai" })).rejects.toThrow("agent_type is required");
-      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "unknown", "hold"), agent_type: "reviewer", inheritedProvider: "openai" })).rejects.toThrow("Agent template not found");
-      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "provider", "hold"), agent_type: "light", inheritedProvider: "openai-codex" })).rejects.toThrow("No subagent tiers configured");
+      await assert.rejects(manager.spawnAgent({ ...spawnParams("bad-tiers", "generic", "hold"), inheritedProvider: "openai" }), /agent_type is required/);
+      await assert.rejects(manager.spawnAgent({ ...spawnParams("bad-tiers", "unknown", "hold"), agent_type: "reviewer", inheritedProvider: "openai" }), /Agent template not found/);
+      await assert.rejects(manager.spawnAgent({ ...spawnParams("bad-tiers", "provider", "hold"), agent_type: "light", inheritedProvider: "openai-codex" }), /No subagent tiers configured/);
       for (const override of [{ model: { provider: "radius", modelId: "wrong" } }, { thinking: "high" as const }]) {
-        await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "override", "hold"), agent_type: "light", inheritedProvider: "openai", ...override })).rejects.toThrow("do not allow model or thinking overrides");
+        await assert.rejects(manager.spawnAgent({ ...spawnParams("bad-tiers", "override", "hold"), agent_type: "light", inheritedProvider: "openai", ...override }), /do not allow model or thinking overrides/);
       }
     } finally {
       await manager.shutdown();
@@ -422,9 +432,9 @@ describe("provider-scoped tiers", () => {
   test("fails closed on malformed routing instead of inheriting a model", () => {
     try {
       fs.writeFileSync(ROUTING_CONFIG_FILE, JSON.stringify({ providerAgents: { openai: { light: { model: "gpt-6-luna", thinking: "typo" } } } }));
-      expect(() => loadSubagentConfig()).toThrow("Invalid providerAgents route");
+      assert.throws(() => loadSubagentConfig(), /Invalid providerAgents route/);
       fs.writeFileSync(ROUTING_CONFIG_FILE, "{");
-      expect(() => loadSubagentConfig()).toThrow();
+      assert.throws(() => loadSubagentConfig());
     } finally {
       fs.rmSync(ROUTING_CONFIG_FILE, { force: true });
     }
@@ -441,12 +451,11 @@ describe("child process lifecycle", () => {
     try {
       await manager.spawnAgent(spawnParams("builtin-extension", "worker", "hold"));
       const info = manager.getAgentInfo("worker", "builtin-extension");
-      expect(info.extensionPaths).toEqual(["builtin:codemode"]);
-      expect(info.tools).toBeUndefined();
+      assert.deepStrictEqual(info.extensionPaths, ["builtin:codemode"]);
+      assert.strictEqual(info.tools, undefined);
       const start = JSON.parse(fs.readFileSync(info.sessionFile, "utf8").split("\n")[0]);
-      expect(start.args).toContain("--no-extensions");
-      expect(start.args.slice(start.args.indexOf("--extension"), start.args.indexOf("--extension") + 2))
-        .toEqual(["--extension", "builtin:codemode"]);
+      assert.ok(start.args.includes("--no-extensions"));
+      assert.deepStrictEqual(start.args.slice(start.args.indexOf("--extension"), start.args.indexOf("--extension") + 2), ["--extension", "builtin:codemode"]);
     } finally {
       await manager.shutdown();
       fs.rmSync(configFile, { force: true });
@@ -469,32 +478,32 @@ describe("child process lifecycle", () => {
         const info = manager.getAgentInfo("worker", parentSessionId);
         return info.status === "completed" && !info.childProcess;
       });
-      expect(pidAlive(firstPid)).toBe(false);
-      expect(manager.readAgentResponse("worker", parentSessionId).finalResponse).toBe("response:first");
+      assert.strictEqual(pidAlive(firstPid), false);
+      assert.strictEqual(manager.readAgentResponse("worker", parentSessionId).finalResponse, "response:first");
 
-      expect(await manager.sendMessage(parentSessionId, "worker", "second")).toEqual({ delivery: "prompt" });
+      assert.deepStrictEqual(await manager.sendMessage(parentSessionId, "worker", "second"), { delivery: "prompt" });
       const secondPid = manager.getAgentInfo("worker", parentSessionId).childProcess!.pid;
-      expect(secondPid).not.toBe(firstPid);
+      assert.notStrictEqual(secondPid, firstPid);
       await waitUntil(() => {
         const info = manager.getAgentInfo("worker", parentSessionId);
         return info.status === "completed" && !info.childProcess;
       });
-      expect(pidAlive(secondPid)).toBe(false);
-      expect(manager.readAgentResponse("worker", parentSessionId).finalResponse).toBe("response:second");
+      assert.strictEqual(pidAlive(secondPid), false);
+      assert.strictEqual(manager.readAgentResponse("worker", parentSessionId).finalResponse, "response:second");
       const sessionRecords = fs.readFileSync(first.sessionFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
       const starts = sessionRecords.filter((entry) => entry.type === "started");
-      expect(new Set(starts.map((entry) => entry.pid)).size).toBe(2);
+      assert.strictEqual(new Set(starts.map((entry) => entry.pid)).size, 2);
       const systemPromptIndex = starts[0].args.indexOf("--system-prompt");
       const systemPromptPath = starts[0].args[systemPromptIndex + 1];
-      expect(path.isAbsolute(systemPromptPath)).toBe(true);
-      expect(fs.readFileSync(systemPromptPath, "utf8")).toBe("You are a subagent working for a main agent. Work only on the assigned task and follow its scope precisely.");
+      assert.strictEqual(path.isAbsolute(systemPromptPath), true);
+      assert.strictEqual(fs.readFileSync(systemPromptPath, "utf8"), "You are a subagent working for a main agent. Work only on the assigned task and follow its scope precisely.");
       for (const start of starts) {
-        expect(start.args).toContain("--no-context-files");
-        expect(start.args.slice(start.args.indexOf("--system-prompt"), start.args.indexOf("--system-prompt") + 2)).toEqual([
+        assert.ok(start.args.includes("--no-context-files"));
+        assert.deepStrictEqual(start.args.slice(start.args.indexOf("--system-prompt"), start.args.indexOf("--system-prompt") + 2), [
           "--system-prompt",
           systemPromptPath,
         ]);
-        expect(start.args.slice(start.args.indexOf("--append-system-prompt"), start.args.indexOf("--append-system-prompt") + 2)).toEqual([
+        assert.deepStrictEqual(start.args.slice(start.args.indexOf("--append-system-prompt"), start.args.indexOf("--append-system-prompt") + 2), [
           "--append-system-prompt",
           "",
         ]);
@@ -524,18 +533,18 @@ describe("child process lifecycle", () => {
       } catch (error) {
         returnedError = error instanceof Error ? error.message : String(error);
       }
-      expect(returnedError).toContain("EEXIST");
+      assert.ok(returnedError.includes("EEXIST"));
       const failed = manager.getAgentInfo("worker", parentSessionId);
-      expect(failed.status).toBe("failed");
-      expect(failed.error).toBe(returnedError);
-      expect(failed.childProcess).toBeUndefined();
-      expect((await manager.waitAllAgents(parentSessionId, ["worker"])).responses).toEqual([
-        expect.objectContaining({ agent_name: "/worker", status: "failed", error: failed.error }),
-      ]);
+      assert.strictEqual(failed.status, "failed");
+      assert.strictEqual(failed.error, returnedError);
+      assert.strictEqual(failed.childProcess, undefined);
+      const failedResponses = (await manager.waitAllAgents(parentSessionId, ["worker"])).responses;
+      assert.strictEqual(failedResponses.length, 1);
+      assert.partialDeepStrictEqual(failedResponses[0], { agent_name: "/worker", status: "failed", error: failed.error });
 
       fs.rmSync(socketDir, { force: true });
       fs.mkdirSync(socketDir, { recursive: true });
-      expect(await manager.sendMessage(parentSessionId, "worker", "retry")).toEqual({ delivery: "prompt" });
+      assert.deepStrictEqual(await manager.sendMessage(parentSessionId, "worker", "retry"), { delivery: "prompt" });
       await waitUntil(() => manager.getAgentInfo("worker", parentSessionId).status === "completed");
     } finally {
       fs.rmSync(socketDir, { recursive: true, force: true });
@@ -574,7 +583,7 @@ describe("child process lifecycle", () => {
     const manager = new AgentManager();
     try {
       await manager.ready();
-      expect(manager.getAgentInfo("orphan", parentSessionId)).toMatchObject({
+      assert.partialDeepStrictEqual(manager.getAgentInfo("orphan", parentSessionId), {
         status: "failed",
         error: "Agent startup did not complete before its owning extension stopped.",
       });
@@ -597,14 +606,14 @@ describe("child process lifecycle", () => {
       await manager.spawnAgent(spawnParams(parentSessionId, "worker", "fail now"));
       const started = manager.getAgentInfo("worker", parentSessionId);
       const pid = started.childProcess!.pid;
-      expect(fs.readFileSync(systemPromptFile, "utf8")).toBe(customSystemPrompt);
+      assert.strictEqual(fs.readFileSync(systemPromptFile, "utf8"), customSystemPrompt);
       await waitUntil(() => {
         const info = manager.getAgentInfo("worker", parentSessionId);
         return info.status === "failed" && !info.childProcess;
       });
       const failed = manager.readAgentResponse("worker", parentSessionId);
-      expect(failed.error).toBe("fake failure");
-      expect(pidAlive(pid)).toBe(false);
+      assert.strictEqual(failed.error, "fake failure");
+      assert.strictEqual(pidAlive(pid), false);
     } finally {
       await manager.shutdown();
       fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
@@ -620,7 +629,7 @@ describe("child process lifecycle", () => {
     fs.writeFileSync(systemPromptFile, "\n");
     const manager = new AgentManager();
     try {
-      await expect(manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"))).rejects.toThrow("Subagent system prompt is empty");
+      await assert.rejects(manager.spawnAgent(spawnParams(parentSessionId, "worker", "first")), /Subagent system prompt is empty/);
     } finally {
       await manager.shutdown();
       fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
@@ -638,8 +647,8 @@ describe("child process lifecycle", () => {
     try {
       await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold darwin"));
       const running = manager.getAgentInfo("worker", parentSessionId);
-      expect(running.childProcess?.pid).toBeNumber();
-      expect(pidAlive(running.childProcess!.pid)).toBe(true);
+      assert.strictEqual(typeof running.childProcess?.pid, "number");
+      assert.strictEqual(pidAlive(running.childProcess!.pid), true);
     } finally {
       try {
         await manager.shutdown();
@@ -662,14 +671,14 @@ describe("child process lifecycle", () => {
       await new Promise((resolve) => setTimeout(resolve, 30));
       const running = manager.getAgentInfo("worker", parentSessionId);
       const [sync, update] = await readSocketEvents(getSocketPath(running.id), 2);
-      expect(sync.status).toBe("calling");
-      expect(sync.partialMessage.content[0]).toMatchObject({ type: "toolCall" });
-      expect(update.type).toBe("message_update");
-      expect(update.message).toBeUndefined();
+      assert.strictEqual(sync.status, "calling");
+      assert.partialDeepStrictEqual(sync.partialMessage.content[0], { type: "toolCall" });
+      assert.strictEqual(update.type, "message_update");
+      assert.strictEqual(update.message, undefined);
 
       const persistedActivity = manager.getAgentInfo("worker", parentSessionId).updatedAt;
       await new Promise((resolve) => setTimeout(resolve, 30));
-      expect(manager.getAgentInfo("worker", parentSessionId).updatedAt).toBe(persistedActivity);
+      assert.strictEqual(manager.getAgentInfo("worker", parentSessionId).updatedAt, persistedActivity);
     } finally {
       await manager.interruptAgent(parentSessionId, "worker");
       await manager.shutdown();
@@ -688,8 +697,8 @@ describe("child process lifecycle", () => {
       await manager.spawnAgent(spawnParams(parentSessionId, "worker", "tool hold"));
       const pid = manager.getAgentInfo("worker", parentSessionId).childProcess!.pid;
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(manager.getAgentInfo("worker", parentSessionId).status).toBe("running");
-      expect(pidAlive(pid)).toBe(true);
+      assert.strictEqual(manager.getAgentInfo("worker", parentSessionId).status, "running");
+      assert.strictEqual(pidAlive(pid), true);
     } finally {
       await manager.interruptAgent(parentSessionId, "worker");
       await manager.shutdown();
@@ -711,8 +720,8 @@ describe("child process lifecycle", () => {
         const info = manager.getAgentInfo("worker", parentSessionId);
         return info.status === "failed" && !info.childProcess;
       });
-      expect(manager.readAgentResponse("worker", parentSessionId).error).toContain("Model response exceeded 50 ms");
-      expect(pidAlive(pid)).toBe(false);
+      assert.ok(manager.readAgentResponse("worker", parentSessionId).error.includes("Model response exceeded 50 ms"));
+      assert.strictEqual(pidAlive(pid), false);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -729,15 +738,15 @@ describe("child process lifecycle", () => {
       await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold interrupt"));
       const running = manager.getAgentInfo("worker", parentSessionId);
       const pid = running.childProcess!.pid;
-      expect((await manager.interruptAgent(parentSessionId, "worker")).previous_status).toBe("running");
+      assert.strictEqual((await manager.interruptAgent(parentSessionId, "worker")).previous_status, "running");
       const interrupted = manager.getAgentInfo("worker", parentSessionId);
-      expect(interrupted.status).toBe("interrupted");
-      expect(interrupted.childProcess).toBeUndefined();
-      expect(pidAlive(pid)).toBe(false);
+      assert.strictEqual(interrupted.status, "interrupted");
+      assert.strictEqual(interrupted.childProcess, undefined);
+      assert.strictEqual(pidAlive(pid), false);
       const socketDir = path.join(process.env.PI_SUBAGENT_TEMP_DIR!, "pi-codex-subagents", os.userInfo().username, "sockets");
-      expect(fs.existsSync(path.join(socketDir, `${running.id}.active.json`))).toBe(false);
-      expect(fs.existsSync(path.join(socketDir, `${running.id}.peek.json`))).toBe(false);
-      if (process.platform !== "win32") expect(fs.existsSync(getSocketPath(running.id))).toBe(false);
+      assert.strictEqual(fs.existsSync(path.join(socketDir, `${running.id}.active.json`)), false);
+      assert.strictEqual(fs.existsSync(path.join(socketDir, `${running.id}.peek.json`)), false);
+      if (process.platform !== "win32") assert.strictEqual(fs.existsSync(getSocketPath(running.id)), false);
     } finally {
       await manager.shutdown();
       fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
@@ -761,7 +770,7 @@ describe("child process lifecycle", () => {
         return info.status === "interrupted" && !info.childProcess;
       });
       await waitUntil(() => !pidAlive(orphanPid));
-      expect(pidAlive(orphanPid)).toBe(false);
+      assert.strictEqual(pidAlive(orphanPid), false);
 
       await owner.spawnAgent(spawnParams(parentSessionId, "pid-reuse", "hold identity"));
       const mismatched = owner.getAgentInfo("pid-reuse", parentSessionId);
@@ -774,9 +783,9 @@ describe("child process lifecycle", () => {
         const info = mismatchReconciler.getAgentInfo("pid-reuse", parentSessionId);
         return info.status === "interrupted" && !info.childProcess;
       });
-      expect(pidAlive(mismatchedPid)).toBe(true);
+      assert.strictEqual(pidAlive(mismatchedPid), true);
       await owner.shutdown();
-      expect(pidAlive(mismatchedPid)).toBe(false);
+      assert.strictEqual(pidAlive(mismatchedPid), false);
     } finally {
       await Promise.all([owner.shutdown(), ...reconcilers.map((manager) => manager.shutdown())]);
       fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
@@ -796,17 +805,17 @@ describe("completion delivery", () => {
     try {
       await manager.spawnAgent(spawnParams(parentSessionId, "settled", "first"));
       await waitUntil(() => completions.some((event) => event.agentName === "/settled"));
-      expect(completions.filter((event) => event.agentName === "/settled")).toHaveLength(1);
-      expect(completions.find((event) => event.agentName === "/settled")).toMatchObject({
+      assert.strictEqual(completions.filter((event) => event.agentName === "/settled").length, 1);
+      assert.partialDeepStrictEqual(completions.find((event) => event.agentName === "/settled"), {
         status: "completed",
         finalResponse: "response:first",
       });
 
       await manager.spawnAgent(spawnParams(parentSessionId, "crashed", "crash now"));
       await waitUntil(() => completions.some((event) => event.agentName === "/crashed"));
-      expect(completions.filter((event) => event.agentName === "/crashed")).toHaveLength(1);
-      expect(completions.find((event) => event.agentName === "/crashed")).toMatchObject({ status: "failed" });
-      expect(completions.find((event) => event.agentName === "/crashed").error).toContain("code=23");
+      assert.strictEqual(completions.filter((event) => event.agentName === "/crashed").length, 1);
+      assert.partialDeepStrictEqual(completions.find((event) => event.agentName === "/crashed"), { status: "failed" });
+      assert.ok(completions.find((event) => event.agentName === "/crashed").error.includes("code=23"));
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -832,9 +841,9 @@ describe("completion delivery", () => {
       // Force terminal-state observation through stdin failure before process exit.
       const live = (manager as any).live.get(persisted.id);
       live.proc.stdin.emit("error", new Error("forced stdin race"));
-      expect((await wait).event).toMatchObject({ agentName: "/worker", status: "interrupted" });
+      assert.partialDeepStrictEqual((await wait).event, { agentName: "/worker", status: "interrupted" });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(completions).toEqual([]);
+      assert.deepStrictEqual(completions, []);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -860,10 +869,10 @@ describe("completion delivery", () => {
 
       const live = (manager as any).live.get(persisted.id);
       live.proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "agent_start" })}\n`));
-      expect((await wait).responses).toEqual([
-        expect.objectContaining({ agent_name: "/worker", status: "completed", finalResponse: "persisted response" }),
-      ]);
-      expect(completions).toEqual([]);
+      const responses = (await wait).responses;
+      assert.strictEqual(responses.length, 1);
+      assert.partialDeepStrictEqual(responses[0], { agent_name: "/worker", status: "completed", finalResponse: "persisted response" });
+      assert.deepStrictEqual(completions, []);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -888,9 +897,9 @@ describe("completion delivery", () => {
 
       process.kill(persisted.childProcess!.pid, "SIGKILL");
       await waitUntil(() => completions.length === 1);
-      expect(completions[0]).toMatchObject({ agentName: "/worker", status: "failed", error: "persisted failure" });
+      assert.partialDeepStrictEqual(completions[0], { agentName: "/worker", status: "failed", error: "persisted failure" });
       await new Promise((resolve) => setTimeout(resolve, 100));
-      expect(completions).toHaveLength(1);
+      assert.strictEqual(completions.length, 1);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -908,13 +917,14 @@ describe("completion delivery", () => {
     try {
       await manager.spawnAgent(spawnParams(parentSessionId, "one", "first"));
       const waited = await manager.waitAgent(parentSessionId, ["one"]);
-      expect(waited.event).toMatchObject({ agentName: "/one", status: "completed" });
-      expect(completions).toEqual([]);
+      assert.partialDeepStrictEqual(waited.event, { agentName: "/one", status: "completed" });
+      assert.deepStrictEqual(completions, []);
 
       await manager.spawnAgent(spawnParams(parentSessionId, "two", "second"));
       const all = await manager.waitAllAgents(parentSessionId, ["two"]);
-      expect(all.responses).toEqual([expect.objectContaining({ agent_name: "/two", status: "completed" })]);
-      expect(completions).toEqual([]);
+      assert.strictEqual(all.responses.length, 1);
+      assert.partialDeepStrictEqual(all.responses[0], { agent_name: "/two", status: "completed" });
+      assert.deepStrictEqual(completions, []);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -935,11 +945,11 @@ describe("completion delivery", () => {
       await manager.spawnAgent(spawnParams(parentSessionId, "fast", "fast"));
       const wait = manager.waitAllAgents(parentSessionId, ["slow", "fast"], controller.signal);
       await waitUntil(() => manager.getAgentInfo("fast", parentSessionId).status === "completed");
-      expect(completions).toEqual([]);
+      assert.deepStrictEqual(completions, []);
       controller.abort(new Error("cancelled"));
-      await expect(wait).rejects.toThrow("aborted");
+      await assert.rejects(wait, /aborted/);
       await waitUntil(() => completions.some((event) => event.agentName === "/fast"));
-      expect(completions.filter((event) => event.agentName === "/fast")).toHaveLength(1);
+      assert.strictEqual(completions.filter((event) => event.agentName === "/fast").length, 1);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -961,26 +971,26 @@ describe("completion delivery", () => {
     try {
       await manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"));
       await waitUntil(() => manager.getAgentInfo("worker", parentSessionId).status === "completed");
-      expect(activity).toContain(true);
-      expect(activity.at(-1)).toBe(false);
+      assert.ok(activity.includes(true));
+      assert.strictEqual(activity.at(-1), false);
 
       const settled = manager.getAgentInfo("worker", parentSessionId);
       const rejectedAt = activity.length;
-      await expect(manager.sendMessage(parentSessionId, "worker", "reject restart")).rejects.toThrow("fake prompt rejection");
-      expect(manager.getAgentInfo("worker", parentSessionId)).toMatchObject({
+      await assert.rejects(manager.sendMessage(parentSessionId, "worker", "reject restart"), /fake prompt rejection/);
+      assert.partialDeepStrictEqual(manager.getAgentInfo("worker", parentSessionId), {
         status: "completed",
         finalResponse: settled.finalResponse,
         completedAt: settled.completedAt,
       });
-      expect(manager.getAgentInfo("worker", parentSessionId).childProcess).toBeUndefined();
-      expect(activity.slice(rejectedAt)).toContain(true);
-      expect(activity.at(-1)).toBe(false);
+      assert.strictEqual(manager.getAgentInfo("worker", parentSessionId).childProcess, undefined);
+      assert.ok(activity.slice(rejectedAt).includes(true));
+      assert.strictEqual(activity.at(-1), false);
 
       const restartAt = activity.length;
       await manager.sendMessage(parentSessionId, "worker", "hold restart");
-      expect(activity.slice(restartAt)).toContain(true);
+      assert.ok(activity.slice(restartAt).includes(true));
       await manager.interruptAgent(parentSessionId, "worker");
-      expect(activity.at(-1)).toBe(false);
+      assert.strictEqual(activity.at(-1), false);
     } finally {
       await manager.shutdown();
       fs.rmSync(scope, { recursive: true, force: true });
@@ -990,7 +1000,8 @@ describe("completion delivery", () => {
 });
 
 describe("extension completion delivery and TUI", () => {
-  test.each([undefined, "", "ctrl+shift+a"])("opens the browser with optional shortcut %s", async (shortcut) => {
+  for (const shortcut of [undefined, "", "ctrl+shift+a"]) {
+    test(`opens the browser with optional shortcut ${shortcut ?? "undefined"}`, async () => {
     const configFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
     fs.mkdirSync(path.dirname(configFile), { recursive: true });
     fs.writeFileSync(configFile, JSON.stringify({ shortcut }));
@@ -1005,7 +1016,7 @@ describe("extension completion delivery and TUI", () => {
         async custom(create: any) {
           const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
           const menu = create({ requestRender() {} }, theme, {}, () => {});
-          expect(menu.render(80).join("\n")).toContain("Subagents");
+          assert.ok(menu.render(80).join("\n").includes("Subagents"));
           menusOpened++;
           return undefined;
         },
@@ -1020,19 +1031,20 @@ describe("extension completion delivery and TUI", () => {
         registerCommand(name: string, command: any) { commands.set(name, command); },
         registerShortcut(key: string, options: any) { shortcuts.set(key, options); },
       } as any);
-      expect([...commands.keys()]).toEqual(["subagents"]);
-      expect([...shortcuts.keys()]).toEqual(shortcut ? [shortcut] : []);
+      assert.deepStrictEqual([...commands.keys()], ["subagents"]);
+      assert.deepStrictEqual([...shortcuts.keys()], shortcut ? [shortcut] : []);
       await commands.get("subagents").handler("", ctx);
-      expect(menusOpened).toBe(1);
+      assert.strictEqual(menusOpened, 1);
       if (shortcut) {
         await shortcuts.get(shortcut).handler(ctx);
-        expect(menusOpened).toBe(2);
+        assert.strictEqual(menusOpened, 2);
       }
     } finally {
       await shutdown?.();
       fs.rmSync(configFile, { force: true });
     }
-  });
+    });
+  }
 
   test("registers commands, renders one-line activity, and delivers bounded completions", async () => {
     process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
@@ -1094,20 +1106,20 @@ describe("extension completion delivery and TUI", () => {
 
     // Session start is the single resolution point, so before it the arguments are absent.
     const spawnArgs = () => tools.get("spawn_agent").parameters.properties;
-    expect(spawnArgs().model).toBeUndefined();
-    expect(spawnArgs().thinking).toBeUndefined();
+    assert.strictEqual(spawnArgs().model, undefined);
+    assert.strictEqual(spawnArgs().thinking, undefined);
 
     try {
       // Session start is authoritative: allowlist entries filtered to what is available,
       // unioned with pi's scoped models, and the schema must not wait for a first turn.
       await emit("session_start", { reason: "startup" });
-      expect(spawnArgs().model.enum).toEqual(["test/fake", "fireworks/accounts/fireworks/models/glm-5p2", "openai/gpt-5"]);
-      expect(spawnArgs().thinking.enum).toContain("max");
-      expect(notifications).toEqual(['spawn_agent models not available: typo/nope']);
+      assert.deepStrictEqual(spawnArgs().model.enum, ["test/fake", "fireworks/accounts/fireworks/models/glm-5p2", "openai/gpt-5"]);
+      assert.ok(spawnArgs().thinking.enum.includes("max"));
+      assert.deepStrictEqual(notifications, ['spawn_agent models not available: typo/nope']);
       // The values live in the schema, but the description has to say the capability exists.
-      expect(tools.get("spawn_agent").description).toContain("`model` takes one of the values its schema lists");
-      expect([...commands.keys()]).toEqual(["subagents"]);
-      expect(renderers.has("pi-codex-subagent-completion")).toBe(true);
+      assert.ok(tools.get("spawn_agent").description.includes("`model` takes one of the values its schema lists"));
+      assert.deepStrictEqual([...commands.keys()], ["subagents"]);
+      assert.strictEqual(renderers.has("pi-codex-subagent-completion"), true);
 
       fs.mkdirSync(scope, { recursive: true });
       const historyCreatedAt = Date.now();
@@ -1139,32 +1151,31 @@ describe("extension completion delivery and TUI", () => {
       const browserLines = browser.render(120);
       const firstRowIndex = browserLines.findIndex((line: string) => line.includes("/history/0"));
       const firstRow = browserLines[firstRowIndex];
-      expect(firstRow).toMatch(/\/history\/0\s+running\s+\S+\s+MiniMax-M3\s+high/);
-      expect(browserLines[firstRowIndex + 1]).toContain("private task context 0");
+      assert.match(firstRow, /\/history\/0\s+running\s+\S+\s+MiniMax-M3\s+high/);
+      assert.ok(browserLines[firstRowIndex + 1].includes("private task context 0"));
       const secondRow = browserLines.find((line: string) => line.includes("/history/1 "));
-      expect(secondRow.indexOf("a-model-name")).toBe(firstRow.indexOf("MiniMax-M3"));
-      expect(visibleWidth(secondRow.slice(0, secondRow.indexOf("medium"))))
-        .toBe(visibleWidth(firstRow.slice(0, firstRow.indexOf("high"))));
-      expect(secondRow).not.toContain("a-model-name-that-is-longer-than-the-column");
+      assert.strictEqual(secondRow.indexOf("a-model-name"), firstRow.indexOf("MiniMax-M3"));
+      assert.strictEqual(visibleWidth(secondRow.slice(0, secondRow.indexOf("medium"))), visibleWidth(firstRow.slice(0, firstRow.indexOf("high"))));
+      assert.ok(!secondRow.includes("a-model-name-that-is-longer-than-the-column"));
       for (const width of [80, 50, 32]) {
-        expect(browser.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
+        assert.strictEqual(browser.render(width).every((line: string) => visibleWidth(line) <= width), true);
       }
       const narrowRow = browser.render(50).find((line: string) => line.includes("/history/0"));
-      expect(narrowRow).toContain("high");
-      expect(narrowRow).not.toContain("MiniMax-M3");
+      assert.ok(narrowRow.includes("high"));
+      assert.ok(!narrowRow.includes("MiniMax-M3"));
       browser.handleInput("\t");
       const allSessionRow = browser.render(80).find((line: string) => line.includes("/history/0"));
-      expect(allSessionRow).toContain("MiniMax-M3");
-      expect(allSessionRow).toContain("high");
-      expect(allSessionRow.trimEnd()).toEndWith(parentSessionId.slice(-8));
+      assert.ok(allSessionRow.includes("MiniMax-M3"));
+      assert.ok(allSessionRow.includes("high"));
+      assert.ok(allSessionRow.trimEnd().endsWith(parentSessionId.slice(-8)));
 
       const firstAgentPage = await tools.get("list_agents").execute("list-1", {}, undefined, undefined, ctx);
       const firstAgentPayload = JSON.parse(firstAgentPage.content[0].text);
-      expect(firstAgentPayload).toMatchObject({ total: 12, returned: 10, offset: 0, limit: 10, next_offset: 10 });
-      expect(firstAgentPayload.agents[0]).toEqual({ agent_name: "/history/0", agent_status: "running" });
-      expect(firstAgentPage.content[0].text).not.toContain("private task context");
+      assert.partialDeepStrictEqual(firstAgentPayload, { total: 12, returned: 10, offset: 0, limit: 10, next_offset: 10 });
+      assert.deepStrictEqual(firstAgentPayload.agents[0], { agent_name: "/history/0", agent_status: "running" });
+      assert.ok(!firstAgentPage.content[0].text.includes("private task context"));
       const secondAgentPage = await tools.get("list_agents").execute("list-2", { offset: 10 }, undefined, undefined, ctx);
-      expect(JSON.parse(secondAgentPage.content[0].text)).toMatchObject({ total: 12, returned: 2, offset: 10, next_offset: null });
+      assert.partialDeepStrictEqual(JSON.parse(secondAgentPage.content[0].text), { total: 12, returned: 2, offset: 10, next_offset: null });
 
       const spawnResult = await tools.get("spawn_agent").execute("spawn-1", {
         task_name: "x".repeat(200),
@@ -1172,19 +1183,19 @@ describe("extension completion delivery and TUI", () => {
       }, undefined, undefined, ctx);
 
       const spawnRendered = tools.get("spawn_agent").renderResult(spawnResult, {}, { fg: (_color: string, text: string) => text }).render(400);
-      expect(spawnRendered.join("\n").trim()).toBe(`✓ ${spawnResult.details.task_name} · test/fake · high`);
+      assert.strictEqual(spawnRendered.join("\n").trim(), `✓ ${spawnResult.details.task_name} · test/fake · high`);
 
-      expect(widget).toBeFunction();
+      assert.strictEqual(typeof widget, "function");
       const theme = { fg: (_color: string, text: string) => text };
       const lines = widget({}, theme).render(40);
-      expect(lines).toHaveLength(1);
-      expect(visibleWidth(lines[0])).toBeLessThanOrEqual(40);
-      expect(lines[0]).toContain("/subagents");
+      assert.strictEqual(lines.length, 1);
+      assert.ok(visibleWidth(lines[0]) <= 40);
+      assert.ok(lines[0].includes("/subagents"));
 
       await waitUntil(() => sentMessages.length === 1);
-      expect(widget).toBeUndefined();
-      expect(sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
-      expect(sentMessages[0].message.content).toContain("response:slow finish");
+      assert.strictEqual(widget, undefined);
+      assert.deepStrictEqual(sentMessages[0].options, { deliverAs: "steer", triggerTurn: true });
+      assert.ok(sentMessages[0].message.content.includes("response:slow finish"));
 
       await tools.get("spawn_agent").execute("spawn-2", {
         task_name: "large-output",
@@ -1192,10 +1203,10 @@ describe("extension completion delivery and TUI", () => {
       }, undefined, undefined, ctx);
       await waitUntil(() => sentMessages.length === 2);
       const large = sentMessages[1].message;
-      expect(Buffer.byteLength(large.content, "utf8")).toBeLessThanOrEqual(50 * 1024);
-      expect(large.content).toContain("Output truncated");
-      expect(large.details.fullOutputPath).toBeString();
-      expect(fs.existsSync(large.details.fullOutputPath)).toBe(true);
+      assert.ok(Buffer.byteLength(large.content, "utf8") <= 50 * 1024);
+      assert.ok(large.content.includes("Output truncated"));
+      assert.strictEqual(typeof large.details.fullOutputPath, "string");
+      assert.strictEqual(fs.existsSync(large.details.fullOutputPath), true);
 
       await tools.get("spawn_agent").execute("spawn-3", {
         task_name: "routed",
@@ -1203,27 +1214,25 @@ describe("extension completion delivery and TUI", () => {
         model: "fireworks/accounts/fireworks/models/glm-5p2",
         thinking: "max",
       }, undefined, undefined, ctx);
-      expect(getAgent("routed", parentSessionId)).toMatchObject({
+      assert.partialDeepStrictEqual(getAgent("routed", parentSessionId), {
         provider: "fireworks",
         modelId: "accounts/fireworks/models/glm-5p2",
         thinking: "max",
       });
       // A model the registry has, but neither list allows, is refused.
-      await expect(tools.get("spawn_agent").execute("spawn-4", { task_name: "not-enabled", message: "x", model: "anthropic/claude-opus-4-6" }, undefined, undefined, ctx))
-        .rejects.toThrow(/not in the configured spawn models/);
+      await assert.rejects(tools.get("spawn_agent").execute("spawn-4", { task_name: "not-enabled", message: "x", model: "anthropic/claude-opus-4-6" }, undefined, undefined, ctx), /not in the configured spawn models/);
 
       // An allowlisted model whose provider dropped out mid-session is refused at spawn time,
       // covering both availability drift and schemas frozen before the session started.
       availableModels.splice(availableModels.findIndex((entry) => entry.provider === "openai"), 1);
-      await expect(tools.get("spawn_agent").execute("spawn-5", { task_name: "gone", message: "x", model: "openai/gpt-5" }, undefined, undefined, ctx))
-        .rejects.toThrow(/not currently available/);
+      await assert.rejects(tools.get("spawn_agent").execute("spawn-5", { task_name: "gone", message: "x", model: "openai/gpt-5" }, undefined, undefined, ctx), /not currently available/);
 
       // Unconfigured takes both runtime arguments away again even though Pi still has enabledModels.
       fs.writeFileSync(configFile, "{}");
       await emit("session_start", { reason: "restart" });
-      expect(spawnArgs().model).toBeUndefined();
-      expect(spawnArgs().thinking).toBeUndefined();
-      expect(tools.get("spawn_agent").description).not.toContain("`model` takes one of the values");
+      assert.strictEqual(spawnArgs().model, undefined);
+      assert.strictEqual(spawnArgs().thinking, undefined);
+      assert.ok(!tools.get("spawn_agent").description.includes("`model` takes one of the values"));
     } finally {
       await emit("session_shutdown", { reason: "quit" });
       fs.rmSync(scope, { recursive: true, force: true });
@@ -1261,30 +1270,30 @@ describe("provider-scoped tool exposure", () => {
     const call = (params: any) => spawn.execute("call", { task_name: "bad-route", message: "hold", ...params }, undefined, undefined, ctx);
     try {
       await emit("session_start");
-      expect(spawn.parameters.required).toContain("agent_type");
-      expect(spawn.parameters.properties.agent_type.enum).toEqual(["light", "medium", "high", "max"]);
-      expect(spawn.parameters.properties.model).toBeUndefined();
-      expect(spawn.parameters.properties.thinking).toBeUndefined();
-      expect(spawn.description).toContain("openai/gpt-5.6-terra");
-      await expect(call({})).rejects.toThrow("agent_type is required");
-      await expect(call({ agent_type: "reviewer" })).rejects.toThrow("not configured");
-      await expect(call({ agent_type: "light", model: "radius/claude-haiku-5-5" })).rejects.toThrow("do not allow model or thinking overrides");
-      await expect(call({ agent_type: "light", thinking: "off" })).rejects.toThrow("do not allow model or thinking overrides");
+      assert.ok(spawn.parameters.required.includes("agent_type"));
+      assert.deepStrictEqual(spawn.parameters.properties.agent_type.enum, ["light", "medium", "high", "max"]);
+      assert.strictEqual(spawn.parameters.properties.model, undefined);
+      assert.strictEqual(spawn.parameters.properties.thinking, undefined);
+      assert.ok(spawn.description.includes("openai/gpt-5.6-terra"));
+      await assert.rejects(call({}), /agent_type is required/);
+      await assert.rejects(call({ agent_type: "reviewer" }), /not configured/);
+      await assert.rejects(call({ agent_type: "light", model: "radius/claude-haiku-5-5" }), /do not allow model or thinking overrides/);
+      await assert.rejects(call({ agent_type: "light", thinking: "off" }), /do not allow model or thinking overrides/);
       for (const provider of ["openai", "anthropic", "radius"]) {
         ctx.model = { provider, id: "parent-model" };
         await emit("model_select");
-        expect(spawn.description).toContain(`${provider}/${PROVIDER_AGENTS[provider].light.model}`);
+        assert.ok(spawn.description.includes(`${provider}/${PROVIDER_AGENTS[provider].light.model}`));
         const result = await call({ task_name: provider, agent_type: "light" });
-        expect(result.details).toMatchObject({ provider, modelId: PROVIDER_AGENTS[provider].light.model, thinking: "max" });
+        assert.partialDeepStrictEqual(result.details, { provider, modelId: PROVIDER_AGENTS[provider].light.model, thinking: "max" });
       }
       available.splice(0, available.length, ...available.filter((model) => model.provider !== "anthropic"));
       ctx.model = { provider: "anthropic", id: "parent-model" };
-      await expect(call({ agent_type: "light" })).rejects.toThrow("not currently available");
+      await assert.rejects(call({ agent_type: "light" }), /not currently available/);
       ctx.model = { provider: "openai-codex", id: "parent-model" };
-      await expect(call({ agent_type: "light" })).rejects.toThrow("not configured");
+      await assert.rejects(call({ agent_type: "light" }), /not configured/);
       ctx.model = { provider: "openai", id: "parent-model" };
       delete available.find((model) => model.provider === "openai" && model.id === "gpt-6-luna").thinkingLevelMap.max;
-      await expect(call({ agent_type: "light" })).rejects.toThrow('does not support thinking "max"');
+      await assert.rejects(call({ agent_type: "light" }), /does not support thinking "max"/);
     } finally {
       await emit("session_shutdown");
       fs.rmSync(ROUTING_CONFIG_FILE, { force: true });
@@ -1298,7 +1307,7 @@ describe("completion mailbox", () => {
     const manager = new AgentManager();
     const controller = new AbortController();
     setTimeout(() => controller.abort(new Error("cancelled")), 10);
-    await expect(manager.waitAgent("empty-parent", undefined, controller.signal)).rejects.toThrow("cancelled");
+    await assert.rejects(manager.waitAgent("empty-parent", undefined, controller.signal), /cancelled/);
     await manager.shutdown();
   });
 
@@ -1308,9 +1317,9 @@ describe("completion mailbox", () => {
       { id: "2", parentSessionId: "parent", agentName: "/two", status: "completed", createdAt: 2 },
       { id: "3", parentSessionId: "other", agentName: "/one", status: "completed", createdAt: 3 },
     ] as any[];
-    expect(consumeFirstMatchingMailboxEvent(events, "parent")?.agentName).toBe("/one");
-    expect(events.map((event) => event.id)).toEqual(["2", "3"]);
-    expect(consumeFirstMatchingMailboxEvent(events, "parent", new Set(["/two"]))?.agentName).toBe("/two");
-    expect(events.map((event) => event.id)).toEqual(["3"]);
+    assert.strictEqual(consumeFirstMatchingMailboxEvent(events, "parent")?.agentName, "/one");
+    assert.deepStrictEqual(events.map((event) => event.id), ["2", "3"]);
+    assert.strictEqual(consumeFirstMatchingMailboxEvent(events, "parent", new Set(["/two"]))?.agentName, "/two");
+    assert.deepStrictEqual(events.map((event) => event.id), ["3"]);
   });
 });

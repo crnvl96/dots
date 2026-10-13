@@ -2,7 +2,7 @@
 
 Codex-shaped, session-scoped subagents for [Pi](https://github.com/earendil-works/pi). Spawn isolated child Pi processes, receive their final responses automatically, steer active work, and inspect sessions in a live overlay.
 
-Requires Pi 0.80.4 or newer and Node.js 22.19 or newer.
+Requires Pi 0.80.4 or newer and Node.js 24 or newer.
 
 ## Dotfiles port
 
@@ -40,7 +40,7 @@ tsc -p tsconfig.json
 npm run test:subagents
 ```
 
-`home/.pi/package.json` pins the SDK's transitive `pi-codemode` dependency to 1.1.0; 1.2.0 removes an export required by Pi 1.1.0. The test script runs each file in a separate Bun process so the core suite's module mock cannot affect the overlay suite. Tests use unique temporary storage, fake child processes, and no paid model requests.
+`home/.pi/package.json` pins the SDK's transitive `pi-codemode` dependency to 1.1.0; 1.2.0 removes an export required by Pi 1.1.0. The test script uses Node.js 24's built-in test runner, which isolates each file in a separate process so the core suite's module mock cannot affect the overlay suite. It enables experimental TypeScript transformation (for parameter properties) and module mocking, with a test-only resolver for local `.js` imports backed by `.ts` source files. No Bun or extra test-runner dependency is needed. Tests use unique temporary storage, fake child processes, and no paid model requests.
 
 ## Tools
 
