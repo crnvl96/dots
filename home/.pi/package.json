@@ -1,5 +1,5 @@
 {
-  "name": "dotfiles",
+  "name": "dotfiles-pi",
   "private": true,
   "devDependencies": {
     "@earendil-works/pi-ai": "1.1.0",

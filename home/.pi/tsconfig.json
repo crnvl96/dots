@@ -7,5 +7,5 @@
     "module": "preserve",
     "moduleResolution": "bundler"
   },
-  "include": ["home/.pi/**/*"]
+  "include": ["agent/**/*"]
 }
