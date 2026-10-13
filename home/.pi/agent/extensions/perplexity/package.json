@@ -1,0 +1,14 @@
+{
+  "name": "dotfiles-pi-perplexity",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "test": "node --test *.test.ts"
+  },
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}

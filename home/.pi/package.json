@@ -5,6 +5,7 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "test:perplexity": "node --test agent/extensions/perplexity/*.test.ts",
     "test:subagents": "node --experimental-transform-types --experimental-test-module-mocks --import ./agent/extensions/codex-subagents/test/register-typescript.js --test agent/extensions/codex-subagents/core.test.ts agent/extensions/codex-subagents/peek.test.ts"
   },
   "overrides": {

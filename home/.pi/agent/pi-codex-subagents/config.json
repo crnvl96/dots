@@ -23,7 +23,7 @@
   "defaults": {
     "extensions": [
       "builtin:codemode",
-      "~/.pi/agent/extensions/perplexity.ts"
+      "~/.pi/agent/extensions/perplexity/index.ts"
     ]
   }
 }
