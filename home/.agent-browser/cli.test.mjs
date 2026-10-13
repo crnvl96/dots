@@ -98,16 +98,21 @@ test("demo launch uses a new tab, then configures before navigation", async () =
   const mock = mockBrowser();
   const options = parseArgs("browser-demo", [url, "--session", "demo", "--wait", "#ready"]);
   let launchArgs;
+  let saved;
   const session = await prepareDemo(options, {
     run: mock.run,
     launch: async (...args) => {
       launchArgs = args;
     },
+    save: async (...args) => {
+      saved = args;
+    },
   });
   assert.equal(session, "demo");
   assert.equal(launchArgs[0].url, "about:blank");
   assert.deepEqual(launchArgs[1], { navigateReuse: false });
-  const actions = mock.calls.map((args) => args.slice(7));
+  assert.deepEqual(saved, ["demo", { port: 9002, inputMode: "human" }]);
+  const actions = mock.calls.map((args) => args.slice(9));
   assert.deepEqual(actions.slice(0, 5), [
     ["connect", "9002"],
     ["tab", "new"],
@@ -119,9 +124,11 @@ test("demo launch uses a new tab, then configures before navigation", async () =
   assert.deepEqual(actions[6], ["wait", "#ready"]);
   assert.match(actions[7][1], /document.fonts.ready/);
   for (const args of mock.calls)
-    assert.deepEqual(args.slice(0, 7), [
+    assert.deepEqual(args.slice(0, 9), [
       "--session",
       "demo",
+      "--cdp",
+      "9002",
       "--input-mode",
       "human",
       "--pin-tab",
@@ -135,6 +142,7 @@ test("automatic session is scoped to worktree and port", async () => {
   const session = await prepareDemo(parseArgs("browser-demo", [url]), {
     run: mock.run,
     launch: async () => {},
+    save: async () => {},
   });
   assert.equal(session, "demo-p9002-worktree");
   assert.deepEqual(mock.calls[0], [
@@ -147,11 +155,57 @@ test("automatic session is scoped to worktree and port", async () => {
   ]);
 });
 
+test("demo persists connection settings for capture on a non-default port", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "browser-session-test-"));
+  const previous = process.env.CHROME_DEBUG_STATE_DIR;
+  process.env.CHROME_DEBUG_STATE_DIR = dir;
+  try {
+    const mock = mockBrowser();
+    await prepareDemo(
+      parseArgs("browser-demo", [
+        url,
+        "--session",
+        "demo",
+        "--port",
+        "9222",
+        "--input-mode",
+        "smooth",
+      ]),
+      { run: mock.run, launch: async () => {} },
+    );
+    assert.deepEqual(JSON.parse(await readFile(join(dir, "sessions", "demo.json"), "utf8")), {
+      port: 9222,
+      inputMode: "smooth",
+    });
+    await capture(parseArgs("browser-demo", ["stop", "--session", "demo"]), mock.run);
+    assert.deepEqual(mock.calls.at(-1), [
+      "--session",
+      "demo",
+      "--cdp",
+      "9222",
+      "--input-mode",
+      "smooth",
+      "--pin-tab",
+      "--color-scheme",
+      "dark",
+      "record",
+      "stop",
+    ]);
+  } finally {
+    if (previous === undefined) delete process.env.CHROME_DEBUG_STATE_DIR;
+    else process.env.CHROME_DEBUG_STATE_DIR = previous;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("readiness failure prevents further commands", async () => {
   const mock = mockBrowser();
   await assert.rejects(
     prepareDemo(parseArgs("browser-demo", [url, "--session", "demo", "--wait", "#ready"]), {
       launch: async () => {},
+      save: async () => {
+        throw new Error("must not save failed setup");
+      },
       run: (args) => {
         if (args.at(-1) === "#ready") throw new Error("not ready");
         return mock.run(args);
@@ -179,9 +233,21 @@ test("screenshot helper preserves paths, waits, and requests PNG", async () => {
       "button",
       "--full",
     ]);
-    await capture(options, mock.run);
+    await capture(options, mock.run, async () => ({ port: 9222, inputMode: "smooth" }));
     assert.deepEqual(mock.calls[0], ["--session", "demo", "session", "info", "--json"]);
-    assert.deepEqual(mock.calls.at(-1).slice(5), [
+    for (const args of mock.calls.slice(1))
+      assert.deepEqual(args.slice(0, 9), [
+        "--session",
+        "demo",
+        "--cdp",
+        "9222",
+        "--input-mode",
+        "smooth",
+        "--pin-tab",
+        "--color-scheme",
+        "dark",
+      ]);
+    assert.deepEqual(mock.calls.at(-1).slice(9), [
       "screenshot",
       resolve(path),
       "--screenshot-format",
@@ -209,9 +275,32 @@ test("capture refuses an inactive session without launching a browser", async ()
 
 test("stop recording does not navigate or wait", async () => {
   const mock = mockBrowser();
-  await capture(parseArgs("browser-demo", ["stop", "--session", "demo"]), mock.run);
+  await capture(parseArgs("browser-demo", ["stop", "--session", "demo"]), mock.run, async () => ({
+    port: 9002,
+    inputMode: "human",
+  }));
   assert.equal(mock.calls.length, 2);
-  assert.deepEqual(mock.calls.at(-1).slice(5), ["record", "stop"]);
+  assert.deepEqual(mock.calls.at(-1).slice(9), ["record", "stop"]);
+});
+
+test("capture refuses missing or invalid connection settings without browser commands", async () => {
+  for (const settings of [
+    null,
+    {},
+    { port: 0, inputMode: "human" },
+    { port: 9002, inputMode: "bad" },
+  ]) {
+    const mock = mockBrowser();
+    await assert.rejects(
+      capture(
+        parseArgs("browser-demo", ["stop", "--session", "demo"]),
+        mock.run,
+        async () => settings,
+      ),
+      /no valid demo connection settings/,
+    );
+    assert.equal(mock.calls.length, 1);
+  }
 });
 
 async function freePort() {

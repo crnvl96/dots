@@ -278,7 +278,24 @@ async function startProcess(executable, args, state) {
   }
 }
 
-export async function prepareDemo(options, { run = runBrowser, launch = launchChrome } = {}) {
+function demoSessionPath(session) {
+  return resolve(
+    process.env.CHROME_DEBUG_STATE_DIR || join(homedir(), ".local/state/agent-browser/chrome"),
+    "sessions",
+    `${session}.json`,
+  );
+}
+
+async function saveDemoSession(session, settings) {
+  const path = demoSessionPath(session);
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
+  await writeFile(path, JSON.stringify(settings), { mode: 0o600 });
+}
+
+export async function prepareDemo(
+  options,
+  { run = runBrowser, launch = launchChrome, save = saveDemoSession } = {},
+) {
   const session =
     options.session ||
     run(["session", "id", "--scope", "worktree", "--prefix", `demo-p${options.port}`]);
@@ -288,6 +305,8 @@ export async function prepareDemo(options, { run = runBrowser, launch = launchCh
   const flags = [
     "--session",
     session,
+    "--cdp",
+    String(options.port),
     "--input-mode",
     options.inputMode,
     "--pin-tab",
@@ -301,6 +320,7 @@ export async function prepareDemo(options, { run = runBrowser, launch = launchCh
   command("set", "media", "dark");
   command("open", options.url);
   waitReady(command, options.wait);
+  await save(session, { port: options.port, inputMode: options.inputMode });
   return session;
 }
 
@@ -313,14 +333,40 @@ function waitReady(command, selector) {
   );
 }
 
-export async function capture(options, run = runBrowser) {
+export async function capture(
+  options,
+  run = runBrowser,
+  load = (session) => readJson(demoSessionPath(session)),
+) {
   const info = JSON.parse(run(["--session", options.session, "session", "info", "--json"]));
   if (!info.success || !info.data?.active)
     throw new Error(
       `Session ${options.session} is not active. Run browser-demo <url> --session ${options.session} first.`,
     );
+  const settings = await load(options.session);
+  if (
+    !settings ||
+    !Number.isInteger(settings.port) ||
+    settings.port < 1 ||
+    settings.port > 65535 ||
+    !["instant", "smooth", "human"].includes(settings.inputMode)
+  )
+    throw new Error(
+      `Session ${options.session} has no valid demo connection settings. Run browser-demo <url> --session ${options.session} again.`,
+    );
   const command = (...args) =>
-    run(["--session", options.session, "--input-mode", "human", "--pin-tab", ...args]);
+    run([
+      "--session",
+      options.session,
+      "--cdp",
+      String(settings.port),
+      "--input-mode",
+      settings.inputMode,
+      "--pin-tab",
+      "--color-scheme",
+      "dark",
+      ...args,
+    ]);
   if (options.action === "stop") return command("record", "stop");
   await mkdir(dirname(options.path), { recursive: true });
   waitReady(command, options.wait);
@@ -353,7 +399,7 @@ export async function main(command, argv) {
       `Chrome ${result.reused ? "reused" : "ready"} on 127.0.0.1:${options.port}\nProfile: ${join(result.state, "profile")}`,
     );
     console.log(
-      `Attach: agent-browser --session chrome-p${options.port} --pin-tab connect ${options.port}`,
+      `Attach: agent-browser --session chrome-p${options.port} --cdp ${options.port} --pin-tab tab list\nKeep --cdp ${options.port} on subsequent agent-browser commands.`,
     );
   } else if (options.action === "open") {
     const session = await prepareDemo(options);
@@ -361,7 +407,7 @@ export async function main(command, argv) {
       `Demo ready: ${session}\nViewport: ${options.width}x${options.height} @ ${options.scale}x; dark; ${options.inputMode} pointer`,
     );
     console.log(
-      `export AGENT_BROWSER_SESSION=${session}\nagent-browser --session ${session} snapshot -i\nbrowser-demo screenshot ./page.png --session ${session}\nbrowser-demo record ./demo.mp4 --session ${session}\nbrowser-demo stop --session ${session}`,
+      `export AGENT_BROWSER_SESSION=${session}\nagent-browser --session ${session} --cdp ${options.port} snapshot -i\nbrowser-demo screenshot ./page.png --session ${session}\nbrowser-demo record ./demo.mp4 --session ${session}\nbrowser-demo stop --session ${session}`,
     );
   } else {
     console.log(await capture(options));

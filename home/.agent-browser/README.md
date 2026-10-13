@@ -32,6 +32,9 @@ The command starts or reuses its dedicated Chrome, attaches agent-browser, opens
 a **new pinned tab**, applies settings before navigation, and waits for the DOM,
 the optional readiness selector, loaded fonts, and two render frames. It does not
 use arbitrary page sleeps or `networkidle` (which hangs on many live apps).
+Every browser command explicitly supplies the CDP endpoint. In agent-browser
+0.39.0, `connect` alone does not keep subsequent commands attached: omitting
+`--cdp` can launch a separate headless browser instead of using visible Chrome.
 
 If `--session` is omitted, a stable name is derived from the current worktree and
 port. The command prints the name and subsequent commands. It cannot export
@@ -39,9 +42,13 @@ variables into the parent shell; copy its printed `export` if desired:
 
 ```sh
 export AGENT_BROWSER_SESSION=product-demo
-agent-browser snapshot -i
-agent-browser click @e3
+agent-browser --cdp 9002 snapshot -i
+agent-browser --cdp 9002 click @e3
 ```
+
+Keep `--cdp <port>` on every direct agent-browser command, including screenshots,
+recordings, and `close`. The capture helpers below supply it automatically from
+saved per-session settings. Use the port passed at setup, not always 9002.
 
 Human mode persists in the configured session. Native `--human`, `--duration`,
 `--steps`, and `--seed` remain available for individual mouse actions. No injected
@@ -66,13 +73,15 @@ browser-demo screenshot ./artifacts/page.png --session product-demo --wait '#rea
 browser-demo screenshot ./artifacts/full.png --session product-demo --full
 
 browser-demo record ./artifacts/demo.mp4 --session product-demo
-agent-browser --session product-demo click @e3
-agent-browser --session product-demo drag @e1 @e2 --human
+agent-browser --session product-demo --cdp 9002 click @e3
+agent-browser --session product-demo --cdp 9002 drag @e1 @e2 --human
 browser-demo stop --session product-demo
 ```
 
 Capture helpers require an active named session and preserve its existing viewport
-and scale. They do not silently start a fresh browser if that session is missing.
+and scale. They reuse the saved CDP port and input mode, and refuse sessions with
+missing connection settings (rerun setup for sessions created by older helpers).
+They do not silently start a fresh browser if that session is missing.
 Output paths can contain spaces; parent directories are created automatically.
 
 - Screenshots use lossless PNG. `--full` captures the full page.
@@ -115,7 +124,12 @@ Profiles are persistent to retain test logins, not disposable `/tmp` profiles:
 └── chrome.log    # startup diagnostics
 ```
 
-Quit the dedicated Chrome window when done. `agent-browser close` disconnects the
+Connection settings are stored separately at
+`~/.local/state/agent-browser/chrome/sessions/<session>.json` so capture helpers
+can attach to the same visible Chrome, including on non-default ports.
+
+Quit the dedicated Chrome window when done.
+`agent-browser --session <name> --cdp <port> close` disconnects the
 session; externally launched Chrome is not owned by agent-browser. To reset login
 state, quit that Chrome first, then remove its port-specific state directory.
 After a failed startup, inspect `chrome.log` and close any partially started
@@ -132,7 +146,8 @@ Environment overrides:
 `config.json` supplies **dark**, **PNG**, and **instant** movement for ordinary
 agent-browser usage. Demo setup opts its own session into **human** movement.
 A fixed port, profile, session, disabled TLS checks, and recording cursor are not
-global defaults.
+global defaults. Avoid a global `AGENT_BROWSER_CDP` setting when working across
+sessions on different ports; use explicit `--cdp` flags instead.
 
 Native precedence: user `~/.agent-browser/config.json` → project
 `./agent-browser.json` → environment → CLI flags. Viewport/scale are runtime
