@@ -53,6 +53,62 @@ test("CLI entry point works when seeded as a symlink", async () => {
   }
 });
 
+function cliHelp(...args) {
+  return execFileSync(process.execPath, [
+    fileURLToPath(new URL("./cli.mjs", import.meta.url)), ...args,
+  ], {
+    encoding: "utf8",
+    // Help must work without Chrome, agent-browser, or ffmpeg on PATH.
+    env: { ...process.env, PATH: "", CHROME_DEBUG_EXECUTABLE: "/nonexistent/chrome" },
+  });
+}
+
+test("help is a self-contained agent guide with safe attach and recording workflows", () => {
+  const output = cliHelp("browser-demo", "--help");
+  for (const section of [
+    "Usage:", "Choose a workflow:", "Options (", "Attach to the page",
+    "Open and record a new demo:", "Agent operating rules:",
+    "Prerequisites and manual Chrome setup:", "Troubleshooting:", "Environment:",
+  ]) assert.ok(output.includes(section), `missing help section: ${section}`);
+  assert.match(output, /--no-pin-tab tab list/);
+  assert.match(output, /browser-demo attach --session manual-demo --port 9002 --tab t1/);
+  assert.match(output, /FIRST connection with --pin-tab intentionally creates a fresh/);
+  assert.match(output, /Never launches Chrome, creates a tab,/);
+  assert.match(output, /browser-demo record ~\/Downloads\/manual-demo\.mp4 --session manual-demo/);
+  assert.match(output, /Always finish with browser-demo stop/);
+  assert.match(output, /remote debugging disabled\s+CANNOT be attached/);
+  assert.match(output, /--remote-debugging-port=9222 \\\n/);
+  assert.match(output, /not raw agent-browser record/);
+  assert.doesNotMatch(output, /README/i);
+});
+
+test("help documents the actual defaults and accepted option ranges", () => {
+  const output = cliHelp("browser-demo", "--help");
+  const defaults = parseArgs("browser-demo", [url]);
+  assert.ok(output.includes(`--port ${defaults.port}`));
+  assert.ok(output.includes(`--viewport ${defaults.width}x${defaults.height}`));
+  assert.ok(output.includes(`--scale ${defaults.scale}`));
+  assert.ok(output.includes(`--input-mode ${defaults.inputMode}`));
+  assert.ok(output.includes(`--fps ${defaults.fps}`));
+  assert.ok(output.includes(`--timeout ${defaults.timeout}`));
+  assert.match(output, /smooth \(default\), human, or instant/);
+  assert.match(output, /1-65535/);
+  assert.match(output, /1-7680/);
+  assert.match(output, /1-300/);
+  assert.match(output, /1-60/);
+  assert.match(output, /Not supported by attach/);
+});
+
+test("short, subcommand, and chrome-debug help work without browser dependencies", () => {
+  const expected = cliHelp("browser-demo", "--help");
+  for (const args of [
+    ["browser-demo", "-h"],
+    ["browser-demo", "attach", "--help"],
+    ["browser-demo", "record", "--help"],
+    ["chrome-debug", "--help"],
+  ]) assert.equal(cliHelp(...args), expected);
+});
+
 test("invalid arguments fail before launch", () => {
   for (const args of [
     [],

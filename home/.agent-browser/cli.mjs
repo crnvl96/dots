@@ -9,8 +9,9 @@ import { pathToFileURL, fileURLToPath } from "node:url";
 
 const cursorWorkerPath = fileURLToPath(new URL("./demo-cursor-worker.mjs", import.meta.url));
 
-const usage = `Usage:
-  chrome-debug <url> [--port 9002] [--timeout 15]
+const usage = `browser-demo / chrome-debug — visible Chrome demos and existing-page recording
+
+Usage:
   browser-demo <url> [--port 9002] [--session name]
                [--viewport 1440x900] [--scale 2] [--input-mode smooth]
                [--wait selector] [--timeout 15]
@@ -19,14 +20,140 @@ const usage = `Usage:
   browser-demo screenshot <path.png> --session name [--wait selector] [--full]
   browser-demo record <path.mp4|path.webm> --session name [--fps 60] [--wait selector]
   browser-demo stop --session name
+  chrome-debug <url> [--port 9002] [--timeout 15]
+  browser-demo --help
+  browser-demo -h
 
-Demo setup uses dark mode, a pinned tab, and 2x device scale.
-Fresh launches reuse the startup tab; attach never opens or navigates a tab.
-Find existing tab ids: agent-browser --session name --cdp 9002 tab list
-Recording includes a neon cursor, glow, and double-ring click burst.
-CHROME_DEBUG_EXECUTABLE overrides the Chrome executable.
-CHROME_DEBUG_STATE_DIR overrides ~/.local/state/agent-browser/chrome.
-Timeout is Chrome startup time in seconds; page waits use agent-browser's timeout.`;
+Choose a workflow:
+  <url>       Open an HTTP(S) page for a new demo. Starts managed Chrome if needed;
+              a fresh launch reuses its startup tab, avoiding an extra blank tab.
+              Reused Chrome gets exactly one new demo tab; existing tabs are kept.
+              Sets dark mode, a 1440x900 viewport, and 2x device scale by default.
+  attach      Use a page the user already opened. Requires an existing CDP endpoint
+              and an explicit tab id. Never launches Chrome, creates a tab,
+              navigates, reloads, or resizes the page. Fails if unavailable.
+  screenshot  Save a PNG of the selected demo tab; --full captures the full page.
+  record      Start recording the selected tab as-is, without opening a tab or
+              navigating. Defaults to 60 fps with a cyan/purple neon arrow, glow,
+              and bright double-ring click bursts. Effects survive navigation.
+  stop        Save the video and stop its cursor worker; leaves Chrome open.
+  chrome-debug
+              Start or reuse managed, visible Chrome on a local CDP port. Does
+              not configure a demo or recording. Navigate manually in that Chrome
+              before using attach, or use browser-demo <url> for a new demo.
+
+Options (supported commands are shown in Usage):
+  --session name     Named agent-browser session. Use a unique name per task,
+                     consisting of letters, digits, underscores, or hyphens.
+                     Never use "default". Open/attach can derive a session from
+                     the worktree and port; they print the name for later use.
+                     screenshot/record/stop require the same explicit session.
+  --port N           Local CDP port, 1-65535 (default: 9002). Only open/attach and
+                     chrome-debug accept this flag. Capture commands reuse the
+                     connection settings saved by open/attach.
+  --tab id           Required for attach. Use t1/t2 from the SAME session's tab
+                     list, or a CDP targetId from tab list --json. Do not guess.
+  --viewport WxH     New demo viewport in CSS pixels (default: 1440x900).
+                     Each dimension must be 1-7680. Not supported by attach.
+  --scale N          New demo device scale, 1-4 (default: 2).
+  --input-mode mode  Pointer movement: smooth (default), human, or instant.
+  --fps N            Recording frame rate, 1-60 (default: 60).
+  --wait selector    Wait for a CSS selector on the selected page before setup
+                     completes or capture starts. Readiness also waits for DOM
+                     content and fonts; it does not rely on network-idle waits.
+  --timeout N        Chrome startup timeout in seconds, 1-300 (default: 15).
+                     This does NOT control page waits or attach timeouts.
+  --full             Full-page PNG; screenshot only.
+  --help, -h         Print this complete guide, including with a subcommand.
+
+Attach to the page the user already opened (no new tab):
+  # Choose a unique session name; use the same name on EVERY command.
+  agent-browser --session manual-demo --cdp 9002 --no-pin-tab tab list
+  # Match the user's page by URL/title; replace t1 with its actual tab id.
+  browser-demo attach --session manual-demo --port 9002 --tab t1
+  agent-browser --session manual-demo --cdp 9002 --pin-tab --input-mode smooth snapshot -i
+  browser-demo record ~/Downloads/manual-demo.mp4 --session manual-demo
+  # Perform the authorized interactions with agent-browser on that same tab.
+  browser-demo stop --session manual-demo
+
+  IMPORTANT: a FIRST connection with --pin-tab intentionally creates a fresh
+  tab when the session has no binding. Discover with --no-pin-tab first, then
+  select the existing tab and enable pinning. The attach wrapper handles this.
+  Do not use browser-demo <url> or agent-browser open for an attach-only task.
+
+Open and record a new demo:
+  browser-demo https://github.com/react/react --session react-demo
+  agent-browser --session react-demo --cdp 9002 --pin-tab --input-mode smooth snapshot -i
+  browser-demo record ~/Downloads/react-demo.mp4 --session react-demo
+  # After finding a ref in the snapshot (replace @eN with the actual ref):
+  agent-browser --session react-demo --cdp 9002 --pin-tab --input-mode smooth click @eN
+  # Take a fresh snapshot after navigation or a page change.
+  browser-demo stop --session react-demo
+
+Agent operating rules:
+  1. Run browser-demo --help first. Choose open versus attach from the user's
+     request. If an attach endpoint/page is missing, report it; do not launch
+     another browser or navigate an unrelated tab as a fallback.
+  2. Keep the same --session, --cdp, and pinned tab for all interactions. Keep
+     --input-mode smooth explicit, or export AGENT_BROWSER_INPUT_MODE=smooth.
+     Shell exports may not persist across separate agent tool calls.
+  3. Use agent-browser snapshot -i to find refs; do not guess refs or reuse stale
+     refs after navigation. Use agent-browser <command> --help for action details.
+  4. Record via browser-demo record, not raw agent-browser record, to get the
+     neon effects. The overlay is inert and hidden from accessibility snapshots;
+     it is not an OS cursor replacement. Screenshots DURING recording include it.
+  5. Choose a descriptive output path and avoid overwriting existing recordings.
+     Perform only interactions the user authorized; a demo does not authorize
+     posting, starring, submitting forms, or other account changes.
+  6. Always finish with browser-demo stop, even after an interaction fails, BEFORE
+     closing a session or starting another demo. This saves the video, removes
+     effects, and stops the page-specific worker without terminating Chrome.
+     Report the saved video path to the user.
+
+Slower movement / lower recording rate:
+  agent-browser --session react-demo --cdp 9002 --pin-tab mouse move 700 380 --duration 800 --steps 60
+  browser-demo record ~/Downloads/take-2.mp4 --session react-demo --fps 30
+  # ~/.agent-browser/config.json also defaults normal pointer input to smooth.
+
+Prerequisites and manual Chrome setup:
+  Requires Node.js 22+ (native WebSocket), agent-browser, Chrome, and ffmpeg on
+  PATH. For recording, ffmpeg needs H.264/VP8 encoders; install with brew install
+  ffmpeg. Use agent-browser doctor to diagnose the browser/recording toolchain.
+
+  Managed Chrome opened by chrome-debug/browser-demo already exposes CDP on
+  port 9002 by default. An ordinary Chrome window with remote debugging disabled
+  CANNOT be attached to via CDP. To open a separate debug Chrome on macOS:
+
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \\
+    --remote-debugging-address=127.0.0.1 \\
+    --remote-debugging-port=9222 \\
+    --user-data-dir="$HOME/.local/state/agent-browser/manual-chrome"
+
+  Open your page yourself in that window. Then discover with --cdp 9222 and
+  attach with --port 9222. Modern Chrome requires a non-default profile for this
+  command-line setup. Never expose the debugging port to untrusted networks.
+  Attach can use an external debug Chrome; opening a managed demo refuses a
+  port occupied by an unowned browser/service. Use another --port in that case.
+
+Troubleshooting:
+  Missing/inactive demo session or settings: open or attach with the intended
+  named session first. Capture does not silently launch Chrome or switch tabs.
+  Pinned tab closed: rediscover with --no-pin-tab tab list, then explicitly
+  attach to the intended remaining page; never fall back to another page.
+  Recording already configured: use browser-demo stop before recording again
+  or reattaching. Always use the wrapper to stop, so its worker is cleaned up.
+  Wrong page/port: verify tab list and keep --cdp on subsequent agent commands;
+  recording/screenshot/stop get the port from saved demo settings.
+
+Environment:
+  CHROME_DEBUG_EXECUTABLE   Chrome binary override (default: macOS Chrome path).
+  CHROME_DEBUG_STATE_DIR    State/profile directory override
+                           (default: ~/.local/state/agent-browser/chrome).
+  AGENT_BROWSER_DEFAULT_TIMEOUT  agent-browser page/action timeout, in ms;
+                                 distinct from Chrome's --timeout seconds.
+
+Validation (from the dotfiles repository):
+  node --test home/.agent-browser/cli.test.mjs`;
 
 export function parseArgs(command, argv) {
   if (!["chrome-debug", "browser-demo"].includes(command)) throw new Error("Unknown command");
@@ -106,7 +233,7 @@ export function parseArgs(command, argv) {
   if (command === "browser-demo" && positional[0] === "attach") {
     options.action = positional.shift();
     if (!options.tab || options.tab.startsWith("-"))
-      throw new Error("Attach requires --tab <tab-id>; use agent-browser --cdp <port> tab list");
+      throw new Error("Attach requires --tab <tab-id>; run browser-demo --help for safe tab discovery");
   } else if (command === "browser-demo" && ["screenshot", "record", "stop"].includes(positional[0])) {
     options.action = positional.shift();
     if (!options.session) throw new Error("Capture commands require --session name");
