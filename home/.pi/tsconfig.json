@@ -7,5 +7,6 @@
     "module": "preserve",
     "moduleResolution": "bundler"
   },
-  "include": ["agent/**/*"]
+  "include": ["agent/**/*"],
+  "exclude": ["**/*.test.ts"]
 }

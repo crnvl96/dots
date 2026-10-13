@@ -1,0 +1,1316 @@
+import { afterAll, describe, expect, mock, test } from "bun:test";
+import * as fs from "node:fs";
+import * as net from "node:net";
+import * as os from "node:os";
+import * as path from "node:path";
+import { visibleWidth } from "@earendil-works/pi-tui";
+
+const TEST_AGENT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), "pi-codex-subagents-tests-"));
+afterAll(() => fs.rmSync(TEST_AGENT_DIR, { recursive: true, force: true }));
+const FAKE_RPC_CHILD = path.join(import.meta.dir, "test", "fake-rpc-child.js");
+process.env.PI_SUBAGENT_TEMP_DIR = path.join(TEST_AGENT_DIR, "temp");
+
+const codingAgent = await import("@earendil-works/pi-coding-agent");
+mock.module("@earendil-works/pi-coding-agent", () => ({
+  ...codingAgent,
+  CONFIG_DIR_NAME: ".pi",
+  getAgentDir: () => TEST_AGENT_DIR,
+}));
+
+const {
+  AgentManager,
+  RpcAssistantStreamState,
+  RpcJsonlDecoder,
+  consumeFirstMatchingMailboxEvent,
+  formatAgentError,
+  getAgent,
+  listAgentDefinitions,
+  getRunsDir,
+  getSocketPath,
+  loadSubagentConfig,
+  parentScopeKey,
+  parseAgentDefinitionText,
+  taskStorageKey,
+} = await import("./core.js");
+const { formatAgentSpecLines } = await import("./peek.js");
+
+
+test("formats the resolved subagent model and thinking for the detail overlay", () => {
+  expect(formatAgentSpecLines({ provider: "openai-codex", modelId: "gpt-5.5", thinking: "high" })).toEqual([
+    "Model: openai-codex/gpt-5.5",
+    "Thinking: high",
+  ]);
+});
+
+describe("RPC streaming", () => {
+  test("assembles delta-only messages and distinguishes tool calls from thinking", () => {
+    const stream = new RpcAssistantStreamState();
+    stream.start({
+      role: "assistant",
+      content: [],
+      api: "test",
+      provider: "test",
+      model: "fake",
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: {} },
+      stopReason: "pending",
+      timestamp: Date.now(),
+    });
+
+    stream.update({ type: "thinking_start", contentIndex: 0 });
+    stream.update({ type: "thinking_delta", contentIndex: 0, delta: "checking" });
+    expect(stream.status).toBe("thinking");
+    expect(stream.message?.content[0]).toMatchObject({ type: "thinking", thinking: "checking" });
+
+    stream.update({ type: "toolcall_start", contentIndex: 1 });
+    stream.update({ type: "toolcall_delta", contentIndex: 1, delta: '{"path":"src' });
+    stream.update({ type: "toolcall_delta", contentIndex: 1, delta: '/ui.rs"}' });
+    expect(stream.status).toBe("calling");
+    expect(stream.message?.content[0]).toMatchObject({ type: "thinking", thinking: "checking" });
+    expect(stream.message?.content[1]).toMatchObject({ type: "toolCall", arguments: { path: "src/ui.rs" } });
+
+    stream.update({
+      type: "toolcall_end",
+      contentIndex: 1,
+      toolCall: { type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/ui.rs" } },
+    });
+    expect(stream.message?.content[1]).toEqual({ type: "toolCall", id: "call-1", name: "read", arguments: { path: "src/ui.rs" } });
+  });
+});
+
+describe("RPC framing", () => {
+  test("explains quota errors that Node leaves unnamed", () => {
+    const error = Object.assign(new Error(`Unknown system error -${os.constants.errno.EDQUOT}, write`), {
+      errno: -os.constants.errno.EDQUOT,
+    });
+    expect(formatAgentError(error)).toContain("Disk quota exceeded (EDQUOT).");
+  });
+
+  test("splits only on LF and preserves Unicode line separators", () => {
+    const decoder = new RpcJsonlDecoder();
+    const payload = JSON.stringify({ text: "before\u2028after" });
+    expect(decoder.push(Buffer.from(payload.slice(0, 7)))).toEqual([]);
+    expect(decoder.push(Buffer.from(`${payload.slice(7)}\n`))).toEqual([payload]);
+    expect(decoder.end()).toEqual([]);
+  });
+});
+
+describe("session-scoped identities", () => {
+  test("separates parent sessions and formerly colliding task names", () => {
+    expect(parentScopeKey("parent-a")).not.toBe(parentScopeKey("parent-b"));
+    expect(taskStorageKey("review/api")).not.toBe(taskStorageKey("review__api"));
+  });
+});
+
+describe("agent templates", () => {
+  test("parses optional routing and extension fields", () => {
+    const definition = parseAgentDefinitionText(`---
+name: reviewer
+provider: openai-codex
+model: gpt-5.6-sol
+thinking: high
+extensions: @scope/tools, ~/.pi/helper.ts
+skills: web-investigate
+---
+Review the requested files.`, "fallback");
+    expect(definition).toMatchObject({
+      name: "reviewer",
+      provider: "openai-codex",
+      model: "gpt-5.6-sol",
+      thinking: "high",
+      extensions: ["@scope/tools", "~/.pi/helper.ts"],
+      skills: ["web-investigate"],
+      prompt: "Review the requested files.",
+    });
+  });
+});
+
+describe("run storage", () => {
+  const packageDir = path.join(TEST_AGENT_DIR, "pi-codex-subagents");
+  const configFile = path.join(packageDir, "config.json");
+  const fixtureDir = path.join(TEST_AGENT_DIR, "retention-fixture");
+
+  test("uses persistent package storage by default", () => {
+    fs.rmSync(configFile, { force: true });
+    expect(getRunsDir()).toBe(path.join(packageDir, "runs"));
+  });
+
+  test("loads the model response timeout from package configuration", () => {
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ modelResponseTimeoutMs: 1234 }));
+    expect(loadSubagentConfig().modelResponseTimeoutMs).toBe(1234);
+    fs.rmSync(configFile, { force: true });
+  });
+
+  test("keeps legacy temporary runs discoverable", () => {
+    fs.rmSync(configFile, { force: true });
+    const parentSessionId = "legacy-parent";
+    const id = "11111111-1111-4111-8111-111111111111";
+    const legacyRoot = path.join(process.env.PI_SUBAGENT_TEMP_DIR!, "pi-codex-subagents", os.userInfo().username, "runs");
+    const legacyScope = path.join(legacyRoot, parentScopeKey(parentSessionId));
+    fs.mkdirSync(legacyScope, { recursive: true });
+    fs.writeFileSync(path.join(legacyScope, `${id}.info.json`), JSON.stringify({
+      id,
+      taskName: "legacy",
+      status: "closed",
+      finalResponse: "legacy response",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+    }));
+
+    expect(getAgent("legacy", parentSessionId)).toMatchObject({ id, status: "completed", finalResponse: "legacy response" });
+    fs.rmSync(legacyScope, { recursive: true, force: true });
+  });
+
+  test("keeps agent lists in creation order when activity changes", async () => {
+    fs.rmSync(configFile, { force: true });
+    const parentSessionId = "creation-order";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    const now = Date.now();
+    const agents = [
+      { id: "11111111-1111-4111-8111-111111111111", taskName: "older", createdAt: now - 2000, lastActivity: now },
+      { id: "22222222-2222-4222-8222-222222222222", taskName: "newer", createdAt: now - 1000, lastActivity: now - 1000 },
+    ];
+    fs.mkdirSync(scope, { recursive: true });
+    for (const agent of agents) {
+      fs.writeFileSync(path.join(scope, `${agent.id}.info.json`), JSON.stringify({
+        ...agent,
+        canonicalName: `/${agent.taskName}`,
+        parentSessionId,
+        status: "completed",
+        updatedAt: agent.lastActivity,
+      }));
+    }
+
+    const manager = new AgentManager();
+    try {
+      expect(manager.listAgents(undefined, parentSessionId).map((agent) => agent.agent_name)).toEqual(["/newer", "/older"]);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  });
+
+  test("ignores malformed info records during reconciliation", async () => {
+    fs.rmSync(configFile, { force: true });
+    const parentSessionId = "malformed-info";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    const malformed = path.join(scope, "33333333-3333-4333-8333-333333333333.info.json");
+    fs.rmSync(scope, { recursive: true, force: true });
+    fs.mkdirSync(scope, { recursive: true });
+    fs.writeFileSync(malformed, "{}");
+    const manager = new AgentManager();
+    try {
+      await manager.ready();
+      expect(manager.listAgents(undefined, parentSessionId)).toEqual([]);
+      expect(fs.existsSync(malformed)).toBe(true);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  });
+
+  test("removes expired runs and outputs using configurable retention", () => {
+    fs.mkdirSync(packageDir, { recursive: true });
+    fs.rmSync(fixtureDir, { recursive: true, force: true });
+    fs.writeFileSync(configFile, JSON.stringify({ storageDir: fixtureDir, retentionDays: 3 }));
+
+    const now = Date.now();
+    const oldTime = new Date(now - 4 * 24 * 60 * 60 * 1000);
+    const scope = path.join(fixtureDir, "a".repeat(24));
+    const unrelatedScope = path.join(fixtureDir, "unrelated");
+    const outputs = path.join(fixtureDir, "_outputs");
+    const expiredId = "11111111-1111-4111-8111-111111111111";
+    const activeId = "22222222-2222-4222-8222-222222222222";
+    const expiredInfo = path.join(scope, `${expiredId}.info.json`);
+    const activeInfo = path.join(scope, `${activeId}.info.json`);
+    const expiredOutput = path.join(outputs, `${oldTime.getTime()}-33333333-3333-4333-8333-333333333333.txt`);
+    const activeMarker = path.join(process.env.PI_SUBAGENT_TEMP_DIR!, "pi-codex-subagents", os.userInfo().username, "sockets", `${activeId}.peek.json`);
+    const unrelatedAgentFile = path.join(scope, `${expiredId}.notes`);
+    const staleLock = path.join(scope, `.task-${"c".repeat(24)}.lock`);
+    const liveOwnerLock = path.join(scope, `.task-${"d".repeat(24)}.lock`);
+
+    try {
+      fs.mkdirSync(scope, { recursive: true });
+      fs.mkdirSync(unrelatedScope, { recursive: true });
+      fs.mkdirSync(outputs, { recursive: true });
+      fs.mkdirSync(path.dirname(activeMarker), { recursive: true });
+      for (const [file, id] of [[expiredInfo, expiredId], [activeInfo, activeId]]) {
+        fs.writeFileSync(file, JSON.stringify({
+          id,
+          createdAt: oldTime.getTime(),
+          updatedAt: oldTime.getTime(),
+          lastActivity: oldTime.getTime(),
+        }));
+        fs.utimesSync(file, oldTime, oldTime);
+      }
+      fs.writeFileSync(activeMarker, JSON.stringify({ pid: process.pid, startedAt: now, token: "test" }));
+      fs.writeFileSync(unrelatedAgentFile, "keep");
+      fs.writeFileSync(staleLock, "");
+      fs.writeFileSync(liveOwnerLock, JSON.stringify({ pid: process.pid }));
+      fs.utimesSync(staleLock, oldTime, oldTime);
+      fs.utimesSync(liveOwnerLock, oldTime, oldTime);
+      fs.writeFileSync(expiredOutput, "old");
+      fs.utimesSync(expiredOutput, oldTime, oldTime);
+      fs.writeFileSync(path.join(outputs, "unrelated.txt"), "keep");
+      fs.writeFileSync(path.join(unrelatedScope, "unrelated.txt"), "keep");
+
+      new AgentManager();
+      expect(fs.existsSync(expiredInfo)).toBe(false);
+      expect(fs.existsSync(activeInfo)).toBe(true);
+      expect(fs.existsSync(unrelatedAgentFile)).toBe(true);
+      expect(fs.existsSync(staleLock)).toBe(false);
+      expect(fs.existsSync(liveOwnerLock)).toBe(true);
+      expect(fs.existsSync(expiredOutput)).toBe(false);
+      expect(fs.existsSync(path.join(outputs, "unrelated.txt"))).toBe(true);
+      expect(fs.existsSync(path.join(unrelatedScope, "unrelated.txt"))).toBe(true);
+
+      fs.writeFileSync(configFile, JSON.stringify({ storageDir: fixtureDir, retentionDays: 0 }));
+      fs.writeFileSync(expiredInfo, "{}");
+      fs.utimesSync(expiredInfo, oldTime, oldTime);
+      new AgentManager();
+      expect(fs.existsSync(expiredInfo)).toBe(true);
+    } finally {
+      fs.rmSync(fixtureDir, { recursive: true, force: true });
+      fs.rmSync(activeMarker, { force: true });
+      fs.rmSync(configFile, { force: true });
+    }
+  });
+});
+
+async function waitUntil(predicate: () => boolean, timeoutMs = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error("Timed out waiting for condition.");
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch { return false; }
+}
+
+async function readSocketEvents(socketPath: string, count: number): Promise<any[]> {
+  return await new Promise((resolve, reject) => {
+    const socket = net.connect(socketPath);
+    const events: any[] = [];
+    let buffer = "";
+    const finish = (error?: Error) => {
+      socket.destroy();
+      if (error) reject(error);
+      else resolve(events);
+    };
+    socket.setTimeout(1000, () => finish(new Error("Timed out waiting for subagent events.")));
+    socket.on("error", (error) => finish(error));
+    socket.on("data", (chunk) => {
+      buffer += chunk.toString();
+      while (events.length < count) {
+        const newline = buffer.indexOf("\n");
+        if (newline === -1) return;
+        events.push(JSON.parse(buffer.slice(0, newline)));
+        buffer = buffer.slice(newline + 1);
+      }
+      finish();
+    });
+  });
+}
+
+function spawnParams(parentSessionId: string, task_name: string, message: string) {
+  return {
+    task_name,
+    message,
+    cwd: TEST_AGENT_DIR,
+    parentSessionId,
+    inheritedProvider: "test",
+    inheritedModelId: "fake",
+  };
+}
+
+describe("spawn model and thinking resolution", () => {
+  test("caller wins, then the template, then the inherited value, then the default", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "spawn-overrides";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    const templateFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "agents", "routed.md");
+    fs.mkdirSync(path.dirname(templateFile), { recursive: true });
+    fs.writeFileSync(templateFile, "---\nname: routed\nprovider: template-provider\nmodel: template-model\nthinking: medium\n---\nRouted template.");
+    const manager = new AgentManager();
+    const spawn = async (task: string, overrides: Record<string, unknown>) => {
+      await manager.spawnAgent({ ...spawnParams(parentSessionId, task, "work"), inheritedThinking: "low", ...overrides });
+      return manager.getAgentInfo(task, parentSessionId);
+    };
+    const callerModel = { model: { provider: "openai", modelId: "gpt-5" } };
+    try {
+      expect(await spawn("inherited", {})).toMatchObject({ model: "test:fake", thinking: "low" });
+      expect(await spawn("caller-model", callerModel)).toMatchObject({ model: "openai:gpt-5", thinking: "low" });
+      expect(await spawn("caller-thinking", { thinking: "max" })).toMatchObject({ model: "test:fake", thinking: "max" });
+      expect(await spawn("template", { agent_type: "routed" })).toMatchObject({ model: "template-provider:template-model", thinking: "medium" });
+      expect(await spawn("caller-beats-template", { agent_type: "routed", ...callerModel, thinking: "xhigh" })).toMatchObject({ model: "openai:gpt-5", thinking: "xhigh" });
+      // No level requested anywhere, not even by the parent, falls back to the package default.
+      await manager.spawnAgent(spawnParams(parentSessionId, "default-thinking", "work"));
+      expect(manager.getAgentInfo("default-thinking", parentSessionId)).toMatchObject({ model: "test:fake", thinking: "high" });
+      await expect(spawn("missing", { agent_type: "absent" })).rejects.toThrow("Agent template not found");
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(templateFile, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+});
+
+const ROUTING_CONFIG_FILE = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
+const PROVIDER_AGENTS = JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../../pi-codex-subagents/config.json"), "utf8")).providerAgents;
+
+function installProviderRoutes() {
+  fs.mkdirSync(path.dirname(ROUTING_CONFIG_FILE), { recursive: true });
+  fs.writeFileSync(ROUTING_CONFIG_FILE, JSON.stringify({ providerAgents: PROVIDER_AGENTS }));
+}
+
+describe("provider-scoped tiers", () => {
+  test("configures exactly the requested models and thinking levels", () => {
+    const claude = {
+      light: { model: "claude-haiku-5-5", thinking: "max" },
+      medium: { model: "claude-sonnet-5-5", thinking: "high" },
+      high: { model: "claude-opus-5-5", thinking: "high" },
+      max: { model: "claude-fable-5-1", thinking: "high" },
+    };
+    expect(PROVIDER_AGENTS).toEqual({
+      openai: {
+        light: { model: "gpt-6-luna", thinking: "max" },
+        medium: { model: "gpt-5.6-terra", thinking: "high" },
+        high: { model: "gpt-6.1-sol", thinking: "high" },
+        max: { model: "gpt-6-astra", thinking: "high" },
+      },
+      anthropic: claude,
+      radius: claude,
+    });
+  });
+
+  test("launches every tier with the exact provider, model, and thinking CLI arguments", async () => {
+    installProviderRoutes();
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const manager = new AgentManager();
+    try {
+      expect(listAgentDefinitions().map((tier) => tier.name)).toEqual(["light", "medium", "high", "max"]);
+      for (const [provider, tiers] of Object.entries(PROVIDER_AGENTS)) {
+        expect(listAgentDefinitions(provider)).toHaveLength(4);
+        for (const [tier, route] of Object.entries(tiers as any)) {
+          const expected = route as any;
+          const parent = `tiers-${provider}`;
+          await manager.spawnAgent({ ...spawnParams(parent, tier, "hold"), agent_type: tier, inheritedProvider: provider, inheritedThinking: "off" });
+          const info = manager.getAgentInfo(tier, parent);
+          expect(info).toMatchObject({ provider, modelId: expected.model, thinking: expected.thinking });
+          const start = JSON.parse(fs.readFileSync(info.sessionFile, "utf8").split("\n")[0]);
+          for (const [flag, value] of [["--provider", provider], ["--model", expected.model], ["--thinking", expected.thinking]]) {
+            expect(start.args[start.args.indexOf(flag) + 1]).toBe(value);
+          }
+        }
+      }
+      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "generic", "hold"), inheritedProvider: "openai" })).rejects.toThrow("agent_type is required");
+      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "unknown", "hold"), agent_type: "reviewer", inheritedProvider: "openai" })).rejects.toThrow("Agent template not found");
+      await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "provider", "hold"), agent_type: "light", inheritedProvider: "openai-codex" })).rejects.toThrow("No subagent tiers configured");
+      for (const override of [{ model: { provider: "radius", modelId: "wrong" } }, { thinking: "high" as const }]) {
+        await expect(manager.spawnAgent({ ...spawnParams("bad-tiers", "override", "hold"), agent_type: "light", inheritedProvider: "openai", ...override })).rejects.toThrow("do not allow model or thinking overrides");
+      }
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(ROUTING_CONFIG_FILE, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("fails closed on malformed routing instead of inheriting a model", () => {
+    try {
+      fs.writeFileSync(ROUTING_CONFIG_FILE, JSON.stringify({ providerAgents: { openai: { light: { model: "gpt-6-luna", thinking: "typo" } } } }));
+      expect(() => loadSubagentConfig()).toThrow("Invalid providerAgents route");
+      fs.writeFileSync(ROUTING_CONFIG_FILE, "{");
+      expect(() => loadSubagentConfig()).toThrow();
+    } finally {
+      fs.rmSync(ROUTING_CONFIG_FILE, { force: true });
+    }
+  });
+});
+
+describe("child process lifecycle", () => {
+  test("passes explicit Pi built-in extension identifiers to the child", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const configFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ defaults: { extensions: ["builtin:codemode"] } }));
+    const manager = new AgentManager();
+    try {
+      await manager.spawnAgent(spawnParams("builtin-extension", "worker", "hold"));
+      const info = manager.getAgentInfo("worker", "builtin-extension");
+      expect(info.extensionPaths).toEqual(["builtin:codemode"]);
+      expect(info.tools).toBeUndefined();
+      const start = JSON.parse(fs.readFileSync(info.sessionFile, "utf8").split("\n")[0]);
+      expect(start.args).toContain("--no-extensions");
+      expect(start.args.slice(start.args.indexOf("--extension"), start.args.indexOf("--extension") + 2))
+        .toEqual(["--extension", "builtin:codemode"]);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(configFile, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("hibernates after settle and lazily restarts the persisted session", async () => {
+    fs.rmSync(path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json"), { force: true });
+    fs.rmSync(path.join(TEST_AGENT_DIR, "pi-codex-subagents", "SYSTEM.md"), { force: true });
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-settle";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    const manager = new AgentManager();
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"));
+      const first = manager.getAgentInfo("worker", parentSessionId);
+      const firstPid = first.childProcess!.pid;
+      await waitUntil(() => {
+        const info = manager.getAgentInfo("worker", parentSessionId);
+        return info.status === "completed" && !info.childProcess;
+      });
+      expect(pidAlive(firstPid)).toBe(false);
+      expect(manager.readAgentResponse("worker", parentSessionId).finalResponse).toBe("response:first");
+
+      expect(await manager.sendMessage(parentSessionId, "worker", "second")).toEqual({ delivery: "prompt" });
+      const secondPid = manager.getAgentInfo("worker", parentSessionId).childProcess!.pid;
+      expect(secondPid).not.toBe(firstPid);
+      await waitUntil(() => {
+        const info = manager.getAgentInfo("worker", parentSessionId);
+        return info.status === "completed" && !info.childProcess;
+      });
+      expect(pidAlive(secondPid)).toBe(false);
+      expect(manager.readAgentResponse("worker", parentSessionId).finalResponse).toBe("response:second");
+      const sessionRecords = fs.readFileSync(first.sessionFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+      const starts = sessionRecords.filter((entry) => entry.type === "started");
+      expect(new Set(starts.map((entry) => entry.pid)).size).toBe(2);
+      const systemPromptIndex = starts[0].args.indexOf("--system-prompt");
+      const systemPromptPath = starts[0].args[systemPromptIndex + 1];
+      expect(path.isAbsolute(systemPromptPath)).toBe(true);
+      expect(fs.readFileSync(systemPromptPath, "utf8")).toBe("You are a subagent working for a main agent. Work only on the assigned task and follow its scope precisely.");
+      for (const start of starts) {
+        expect(start.args).toContain("--no-context-files");
+        expect(start.args.slice(start.args.indexOf("--system-prompt"), start.args.indexOf("--system-prompt") + 2)).toEqual([
+          "--system-prompt",
+          systemPromptPath,
+        ]);
+        expect(start.args.slice(start.args.indexOf("--append-system-prompt"), start.args.indexOf("--append-system-prompt") + 2)).toEqual([
+          "--append-system-prompt",
+          "",
+        ]);
+      }
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("records startup failure causes instead of leaving agents starting", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-startup-failure";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    const socketDir = path.dirname(getSocketPath("11111111-1111-4111-8111-111111111111"));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const manager = new AgentManager();
+    await manager.ready();
+    fs.rmSync(socketDir, { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(socketDir), { recursive: true });
+    fs.writeFileSync(socketDir, "block startup marker creation");
+    try {
+      let returnedError = "";
+      try {
+        await manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"));
+      } catch (error) {
+        returnedError = error instanceof Error ? error.message : String(error);
+      }
+      expect(returnedError).toContain("EEXIST");
+      const failed = manager.getAgentInfo("worker", parentSessionId);
+      expect(failed.status).toBe("failed");
+      expect(failed.error).toBe(returnedError);
+      expect(failed.childProcess).toBeUndefined();
+      expect((await manager.waitAllAgents(parentSessionId, ["worker"])).responses).toEqual([
+        expect.objectContaining({ agent_name: "/worker", status: "failed", error: failed.error }),
+      ]);
+
+      fs.rmSync(socketDir, { force: true });
+      fs.mkdirSync(socketDir, { recursive: true });
+      expect(await manager.sendMessage(parentSessionId, "worker", "retry")).toEqual({ delivery: "prompt" });
+      await waitUntil(() => manager.getAgentInfo("worker", parentSessionId).status === "completed");
+    } finally {
+      fs.rmSync(socketDir, { recursive: true, force: true });
+      fs.mkdirSync(socketDir, { recursive: true });
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("reconciles persisted startup records that never acquired a child", async () => {
+    const parentSessionId = "lifecycle-reconcile-no-child";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    const id = "33333333-3333-4333-8333-333333333333";
+    const infoFile = path.join(scope, `${id}.info.json`);
+    fs.rmSync(scope, { recursive: true, force: true });
+    fs.mkdirSync(scope, { recursive: true });
+    fs.writeFileSync(infoFile, JSON.stringify({
+      id,
+      taskName: "orphan",
+      canonicalName: "/orphan",
+      parentSessionId,
+      provider: "test",
+      modelId: "fake",
+      model: "test:fake",
+      cwd: TEST_AGENT_DIR,
+      sessionFile: path.join(scope, `${id}.jsonl`),
+      infoFile,
+      logFile: path.join(scope, `${id}.log`),
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      lastActivity: Date.now(),
+      messageCount: 0,
+      status: "starting",
+    }));
+    const manager = new AgentManager();
+    try {
+      await manager.ready();
+      expect(manager.getAgentInfo("orphan", parentSessionId)).toMatchObject({
+        status: "failed",
+        error: "Agent startup did not complete before its owning extension stopped.",
+      });
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+    }
+  });
+
+  test("hibernates after failure while preserving the error", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-failure";
+    const systemPromptFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "SYSTEM.md");
+    const customSystemPrompt = "Use the custom subagent instructions.";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    fs.mkdirSync(path.dirname(systemPromptFile), { recursive: true });
+    fs.writeFileSync(systemPromptFile, customSystemPrompt);
+    const manager = new AgentManager();
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "fail now"));
+      const started = manager.getAgentInfo("worker", parentSessionId);
+      const pid = started.childProcess!.pid;
+      expect(fs.readFileSync(systemPromptFile, "utf8")).toBe(customSystemPrompt);
+      await waitUntil(() => {
+        const info = manager.getAgentInfo("worker", parentSessionId);
+        return info.status === "failed" && !info.childProcess;
+      });
+      const failed = manager.readAgentResponse("worker", parentSessionId);
+      expect(failed.error).toBe("fake failure");
+      expect(pidAlive(pid)).toBe(false);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+      fs.rmSync(systemPromptFile, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("rejects an empty configured system prompt instead of falling back to Pi's default", async () => {
+    const parentSessionId = "empty-system-prompt";
+    const systemPromptFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "SYSTEM.md");
+    fs.mkdirSync(path.dirname(systemPromptFile), { recursive: true });
+    fs.writeFileSync(systemPromptFile, "\n");
+    const manager = new AgentManager();
+    try {
+      await expect(manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"))).rejects.toThrow("Subagent system prompt is empty");
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+      fs.rmSync(systemPromptFile, { force: true });
+    }
+  });
+
+  test("accepts Darwin process ownership when ps cannot expose the token", async () => {
+    const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
+    Object.defineProperty(process, "platform", { ...platformDescriptor, value: "darwin" });
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-darwin";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    const manager = new AgentManager();
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold darwin"));
+      const running = manager.getAgentInfo("worker", parentSessionId);
+      expect(running.childProcess?.pid).toBeNumber();
+      expect(pidAlive(running.childProcess!.pid)).toBe(true);
+    } finally {
+      try {
+        await manager.shutdown();
+      } finally {
+        Object.defineProperty(process, "platform", platformDescriptor);
+        fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+        delete process.env.PI_SUBAGENT_PI_BIN;
+      }
+    }
+  });
+
+  test("broadcasts delta-only tool-call progress instead of reporting thinking", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-delta-only-progress";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const manager = new AgentManager({ modelResponseTimeoutMs: 2000 });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "stream forever"));
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      const running = manager.getAgentInfo("worker", parentSessionId);
+      const [sync, update] = await readSocketEvents(getSocketPath(running.id), 2);
+      expect(sync.status).toBe("calling");
+      expect(sync.partialMessage.content[0]).toMatchObject({ type: "toolCall" });
+      expect(update.type).toBe("message_update");
+      expect(update.message).toBeUndefined();
+
+      const persistedActivity = manager.getAgentInfo("worker", parentSessionId).updatedAt;
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      expect(manager.getAgentInfo("worker", parentSessionId).updatedAt).toBe(persistedActivity);
+    } finally {
+      await manager.interruptAgent(parentSessionId, "worker");
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("does not apply the model response timeout to tool execution", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-tool-timeout";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const manager = new AgentManager({ modelResponseTimeoutMs: 50 });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "tool hold"));
+      const pid = manager.getAgentInfo("worker", parentSessionId).childProcess!.pid;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(manager.getAgentInfo("worker", parentSessionId).status).toBe("running");
+      expect(pidAlive(pid)).toBe(true);
+    } finally {
+      await manager.interruptAgent(parentSessionId, "worker");
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("fails and terminates a model response that streams forever", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-model-response-timeout";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const manager = new AgentManager({ modelResponseTimeoutMs: 50 });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "stream forever"));
+      const pid = manager.getAgentInfo("worker", parentSessionId).childProcess!.pid;
+      await waitUntil(() => {
+        const info = manager.getAgentInfo("worker", parentSessionId);
+        return info.status === "failed" && !info.childProcess;
+      });
+      expect(manager.readAgentResponse("worker", parentSessionId).error).toContain("Model response exceeded 50 ms");
+      expect(pidAlive(pid)).toBe(false);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("interrupt terminates the child and clears runtime artifacts", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-interrupt";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    const manager = new AgentManager();
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold interrupt"));
+      const running = manager.getAgentInfo("worker", parentSessionId);
+      const pid = running.childProcess!.pid;
+      expect((await manager.interruptAgent(parentSessionId, "worker")).previous_status).toBe("running");
+      const interrupted = manager.getAgentInfo("worker", parentSessionId);
+      expect(interrupted.status).toBe("interrupted");
+      expect(interrupted.childProcess).toBeUndefined();
+      expect(pidAlive(pid)).toBe(false);
+      const socketDir = path.join(process.env.PI_SUBAGENT_TEMP_DIR!, "pi-codex-subagents", os.userInfo().username, "sockets");
+      expect(fs.existsSync(path.join(socketDir, `${running.id}.active.json`))).toBe(false);
+      expect(fs.existsSync(path.join(socketDir, `${running.id}.peek.json`))).toBe(false);
+      if (process.platform !== "win32") expect(fs.existsSync(getSocketPath(running.id))).toBe(false);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("reconciles owned children without risking PID-reuse kills", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "lifecycle-reconcile";
+    fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+    const owner = new AgentManager();
+    const reconcilers: AgentManager[] = [];
+    try {
+      await owner.spawnAgent(spawnParams(parentSessionId, "orphan", "hold orphan"));
+      const orphanPid = owner.getAgentInfo("orphan", parentSessionId).childProcess!.pid;
+      const reconciler = new AgentManager();
+      reconcilers.push(reconciler);
+      await waitUntil(() => {
+        const info = reconciler.getAgentInfo("orphan", parentSessionId);
+        return info.status === "interrupted" && !info.childProcess;
+      });
+      await waitUntil(() => !pidAlive(orphanPid));
+      expect(pidAlive(orphanPid)).toBe(false);
+
+      await owner.spawnAgent(spawnParams(parentSessionId, "pid-reuse", "hold identity"));
+      const mismatched = owner.getAgentInfo("pid-reuse", parentSessionId);
+      const mismatchedPid = mismatched.childProcess!.pid;
+      mismatched.childProcess!.processIdentity = "not-the-owned-process";
+      fs.writeFileSync(mismatched.infoFile, JSON.stringify(mismatched, null, 2));
+      const mismatchReconciler = new AgentManager();
+      reconcilers.push(mismatchReconciler);
+      await waitUntil(() => {
+        const info = mismatchReconciler.getAgentInfo("pid-reuse", parentSessionId);
+        return info.status === "interrupted" && !info.childProcess;
+      });
+      expect(pidAlive(mismatchedPid)).toBe(true);
+      await owner.shutdown();
+      expect(pidAlive(mismatchedPid)).toBe(false);
+    } finally {
+      await Promise.all([owner.shutdown(), ...reconcilers.map((manager) => manager.shutdown())]);
+      fs.rmSync(path.join(getRunsDir(), parentScopeKey(parentSessionId)), { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+});
+
+describe("completion delivery", () => {
+  test("publishes unclaimed settled and abnormal-exit completions", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-callbacks";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "settled", "first"));
+      await waitUntil(() => completions.some((event) => event.agentName === "/settled"));
+      expect(completions.filter((event) => event.agentName === "/settled")).toHaveLength(1);
+      expect(completions.find((event) => event.agentName === "/settled")).toMatchObject({
+        status: "completed",
+        finalResponse: "response:first",
+      });
+
+      await manager.spawnAgent(spawnParams(parentSessionId, "crashed", "crash now"));
+      await waitUntil(() => completions.some((event) => event.agentName === "/crashed"));
+      expect(completions.filter((event) => event.agentName === "/crashed")).toHaveLength(1);
+      expect(completions.find((event) => event.agentName === "/crashed")).toMatchObject({ status: "failed" });
+      expect(completions.find((event) => event.agentName === "/crashed").error).toContain("code=23");
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("delivers an externally persisted terminal state to an active waiter exactly once", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-external-terminal";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold external"));
+      const wait = manager.waitAgent(parentSessionId, ["worker"]);
+      const persisted = manager.getAgentInfo("worker", parentSessionId);
+      persisted.status = "interrupted";
+      persisted.lastActivity = Date.now();
+      fs.writeFileSync(persisted.infoFile, JSON.stringify(persisted, null, 2));
+
+      // Force terminal-state observation through stdin failure before process exit.
+      const live = (manager as any).live.get(persisted.id);
+      live.proc.stdin.emit("error", new Error("forced stdin race"));
+      expect((await wait).event).toMatchObject({ agentName: "/worker", status: "interrupted" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(completions).toEqual([]);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("delivers an adopted terminal state observed through child output to wait_all_agents", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-external-output";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold external"));
+      const wait = manager.waitAllAgents(parentSessionId, ["worker"]);
+      const persisted = manager.getAgentInfo("worker", parentSessionId);
+      persisted.status = "completed";
+      persisted.finalResponse = "persisted response";
+      persisted.completedAt = Date.now();
+      fs.writeFileSync(persisted.infoFile, JSON.stringify(persisted, null, 2));
+
+      const live = (manager as any).live.get(persisted.id);
+      live.proc.stdout.emit("data", Buffer.from(`${JSON.stringify({ type: "agent_start" })}\n`));
+      expect((await wait).responses).toEqual([
+        expect.objectContaining({ agent_name: "/worker", status: "completed", finalResponse: "persisted response" }),
+      ]);
+      expect(completions).toEqual([]);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("automatically delivers an adopted terminal state observed through process exit once", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-external-exit";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "hold external"));
+      const persisted = manager.getAgentInfo("worker", parentSessionId);
+      persisted.status = "failed";
+      persisted.error = "persisted failure";
+      persisted.completedAt = Date.now();
+      fs.writeFileSync(persisted.infoFile, JSON.stringify(persisted, null, 2));
+
+      process.kill(persisted.childProcess!.pid, "SIGKILL");
+      await waitUntil(() => completions.length === 1);
+      expect(completions[0]).toMatchObject({ agentName: "/worker", status: "failed", error: "persisted failure" });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(completions).toHaveLength(1);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("suppresses automatic delivery while wait tools claim completions", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-waits";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "one", "first"));
+      const waited = await manager.waitAgent(parentSessionId, ["one"]);
+      expect(waited.event).toMatchObject({ agentName: "/one", status: "completed" });
+      expect(completions).toEqual([]);
+
+      await manager.spawnAgent(spawnParams(parentSessionId, "two", "second"));
+      const all = await manager.waitAllAgents(parentSessionId, ["two"]);
+      expect(all.responses).toEqual([expect.objectContaining({ agent_name: "/two", status: "completed" })]);
+      expect(completions).toEqual([]);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("releases suppressed completions when wait_all_agents is cancelled", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "completion-wait-cancel";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const completions: any[] = [];
+    const manager = new AgentManager({ onUnclaimedCompletion: (event: any) => completions.push(event) });
+    const controller = new AbortController();
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "slow", "hold slow"));
+      await manager.spawnAgent(spawnParams(parentSessionId, "fast", "fast"));
+      const wait = manager.waitAllAgents(parentSessionId, ["slow", "fast"], controller.signal);
+      await waitUntil(() => manager.getAgentInfo("fast", parentSessionId).status === "completed");
+      expect(completions).toEqual([]);
+      controller.abort(new Error("cancelled"));
+      await expect(wait).rejects.toThrow("aborted");
+      await waitUntil(() => completions.some((event) => event.agentName === "/fast"));
+      expect(completions.filter((event) => event.agentName === "/fast")).toHaveLength(1);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+
+  test("reports active and inactive lifecycle transitions", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const parentSessionId = "status-transitions";
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const activity: boolean[] = [];
+    const manager = new AgentManager({
+      onActivityChange: (event: any) => {
+        if (event.parentSessionId === parentSessionId) activity.push(event.active);
+      },
+    });
+    try {
+      await manager.spawnAgent(spawnParams(parentSessionId, "worker", "first"));
+      await waitUntil(() => manager.getAgentInfo("worker", parentSessionId).status === "completed");
+      expect(activity).toContain(true);
+      expect(activity.at(-1)).toBe(false);
+
+      const settled = manager.getAgentInfo("worker", parentSessionId);
+      const rejectedAt = activity.length;
+      await expect(manager.sendMessage(parentSessionId, "worker", "reject restart")).rejects.toThrow("fake prompt rejection");
+      expect(manager.getAgentInfo("worker", parentSessionId)).toMatchObject({
+        status: "completed",
+        finalResponse: settled.finalResponse,
+        completedAt: settled.completedAt,
+      });
+      expect(manager.getAgentInfo("worker", parentSessionId).childProcess).toBeUndefined();
+      expect(activity.slice(rejectedAt)).toContain(true);
+      expect(activity.at(-1)).toBe(false);
+
+      const restartAt = activity.length;
+      await manager.sendMessage(parentSessionId, "worker", "hold restart");
+      expect(activity.slice(restartAt)).toContain(true);
+      await manager.interruptAgent(parentSessionId, "worker");
+      expect(activity.at(-1)).toBe(false);
+    } finally {
+      await manager.shutdown();
+      fs.rmSync(scope, { recursive: true, force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+});
+
+describe("extension completion delivery and TUI", () => {
+  test.each([undefined, "", "ctrl+shift+a"])("opens the browser with optional shortcut %s", async (shortcut) => {
+    const configFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
+    fs.mkdirSync(path.dirname(configFile), { recursive: true });
+    fs.writeFileSync(configFile, JSON.stringify({ shortcut }));
+    const commands = new Map<string, any>();
+    const shortcuts = new Map<string, any>();
+    let shutdown: (() => Promise<void>) | undefined;
+    let menusOpened = 0;
+    const ctx: any = {
+      mode: "tui",
+      sessionManager: { getSessionId: () => "shortcut-test-parent" },
+      ui: {
+        async custom(create: any) {
+          const theme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+          const menu = create({ requestRender() {} }, theme, {}, () => {});
+          expect(menu.render(80).join("\n")).toContain("Subagents");
+          menusOpened++;
+          return undefined;
+        },
+      },
+    };
+    const { default: subagentExtension } = await import("./index.js");
+    try {
+      subagentExtension({
+        on(name: string, handler: any) { if (name === "session_shutdown") shutdown = handler; },
+        registerTool() {},
+        registerMessageRenderer() {},
+        registerCommand(name: string, command: any) { commands.set(name, command); },
+        registerShortcut(key: string, options: any) { shortcuts.set(key, options); },
+      } as any);
+      expect([...commands.keys()]).toEqual(["subagents"]);
+      expect([...shortcuts.keys()]).toEqual(shortcut ? [shortcut] : []);
+      await commands.get("subagents").handler("", ctx);
+      expect(menusOpened).toBe(1);
+      if (shortcut) {
+        await shortcuts.get(shortcut).handler(ctx);
+        expect(menusOpened).toBe(2);
+      }
+    } finally {
+      await shutdown?.();
+      fs.rmSync(configFile, { force: true });
+    }
+  });
+
+  test("registers commands, renders one-line activity, and delivers bounded completions", async () => {
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const handlers = new Map<string, Array<(event: any, ctx: any) => any>>();
+    const tools = new Map<string, any>();
+    const commands = new Map<string, any>();
+    const renderers = new Map<string, any>();
+    const sentMessages: Array<{ message: any; options: any }> = [];
+    let widget: any;
+    const pi: any = {
+      on(name: string, handler: (event: any, ctx: any) => any) {
+        const entries = handlers.get(name) ?? [];
+        entries.push(handler);
+        handlers.set(name, entries);
+      },
+      registerTool(tool: any) { tools.set(tool.name, tool); },
+      registerCommand(name: string, command: any) { commands.set(name, command); },
+      registerMessageRenderer(name: string, renderer: any) { renderers.set(name, renderer); },
+      sendMessage(message: any, options: any) { sentMessages.push({ message, options }); },
+      getThinkingLevel() { return "high"; },
+      getActiveTools() { return ["read", "bash"]; },
+    };
+    const parentSessionId = "index-integration-parent";
+    const availableModels = [
+      { provider: "test", id: "fake" },
+      { provider: "fireworks", id: "accounts/fireworks/models/glm-5p2" },
+      { provider: "openai", id: "gpt-5" },
+    ];
+    const notifications: string[] = [];
+    const ctx: any = {
+      cwd: TEST_AGENT_DIR,
+      mode: "tui",
+      model: { provider: "test", id: "fake" },
+      modelRegistry: { getAvailable: () => availableModels },
+      // What pi resolved the enabledModels patterns to for this session, availability-checked.
+      scopedModels: [
+        { model: { provider: "fireworks", id: "accounts/fireworks/models/glm-5p2" } },
+        { model: { provider: "openai", id: "gpt-5" } },
+      ],
+      sessionManager: {
+        getSessionId: () => parentSessionId,
+        getSessionFile: () => path.join(TEST_AGENT_DIR, "parent.jsonl"),
+      },
+      ui: {
+        setWidget(_key: string, value: any) { widget = value; },
+        notify(message: string) { notifications.push(message); },
+      },
+    };
+    const scope = path.join(getRunsDir(), parentScopeKey(parentSessionId));
+    fs.rmSync(scope, { recursive: true, force: true });
+    const configFile = path.join(TEST_AGENT_DIR, "pi-codex-subagents", "config.json");
+    // A thinking suffix on an allowlist entry is tolerated and stripped from the offered pair.
+    fs.writeFileSync(configFile, JSON.stringify({ models: ["test/fake:high", "typo/nope"], modelsFromEnabledModels: true }));
+    const { default: subagentExtension } = await import("./index.js");
+    subagentExtension(pi);
+    const emit = async (name: string, event: any = {}) => {
+      for (const handler of handlers.get(name) ?? []) await handler(event, ctx);
+    };
+
+    // Session start is the single resolution point, so before it the arguments are absent.
+    const spawnArgs = () => tools.get("spawn_agent").parameters.properties;
+    expect(spawnArgs().model).toBeUndefined();
+    expect(spawnArgs().thinking).toBeUndefined();
+
+    try {
+      // Session start is authoritative: allowlist entries filtered to what is available,
+      // unioned with pi's scoped models, and the schema must not wait for a first turn.
+      await emit("session_start", { reason: "startup" });
+      expect(spawnArgs().model.enum).toEqual(["test/fake", "fireworks/accounts/fireworks/models/glm-5p2", "openai/gpt-5"]);
+      expect(spawnArgs().thinking.enum).toContain("max");
+      expect(notifications).toEqual(['spawn_agent models not available: typo/nope']);
+      // The values live in the schema, but the description has to say the capability exists.
+      expect(tools.get("spawn_agent").description).toContain("`model` takes one of the values its schema lists");
+      expect([...commands.keys()]).toEqual(["subagents"]);
+      expect(renderers.has("pi-codex-subagent-completion")).toBe(true);
+
+      fs.mkdirSync(scope, { recursive: true });
+      const historyCreatedAt = Date.now();
+      for (let index = 0; index < 12; index++) {
+        const id = `44444444-4444-4444-8444-${String(index).padStart(12, "0")}`;
+        fs.writeFileSync(path.join(scope, `${id}.info.json`), JSON.stringify({
+          id,
+          taskName: `history/${index}`,
+          canonicalName: `/history/${index}`,
+          parentSessionId,
+          status: index === 0 ? "running" : "completed",
+          lastTaskMessage: `private task context ${index}`,
+          provider: "test",
+          modelId: index === 0 ? "MiniMax-M3" : "a-model-name-that-is-longer-than-the-column",
+          thinking: index === 0 ? "high" : "medium",
+          createdAt: historyCreatedAt - index,
+          updatedAt: historyCreatedAt - index,
+        }));
+      }
+      let browser: any;
+      ctx.ui.custom = async (create: any) => {
+        browser = create({ requestRender() {} }, {
+          fg: (_color: string, text: string) => text,
+          bold: (text: string) => text,
+        }, {}, () => {});
+        return undefined;
+      };
+      await commands.get("subagents").handler("", ctx);
+      const browserLines = browser.render(120);
+      const firstRowIndex = browserLines.findIndex((line: string) => line.includes("/history/0"));
+      const firstRow = browserLines[firstRowIndex];
+      expect(firstRow).toMatch(/\/history\/0\s+running\s+\S+\s+MiniMax-M3\s+high/);
+      expect(browserLines[firstRowIndex + 1]).toContain("private task context 0");
+      const secondRow = browserLines.find((line: string) => line.includes("/history/1 "));
+      expect(secondRow.indexOf("a-model-name")).toBe(firstRow.indexOf("MiniMax-M3"));
+      expect(visibleWidth(secondRow.slice(0, secondRow.indexOf("medium"))))
+        .toBe(visibleWidth(firstRow.slice(0, firstRow.indexOf("high"))));
+      expect(secondRow).not.toContain("a-model-name-that-is-longer-than-the-column");
+      for (const width of [80, 50, 32]) {
+        expect(browser.render(width).every((line: string) => visibleWidth(line) <= width)).toBe(true);
+      }
+      const narrowRow = browser.render(50).find((line: string) => line.includes("/history/0"));
+      expect(narrowRow).toContain("high");
+      expect(narrowRow).not.toContain("MiniMax-M3");
+      browser.handleInput("\t");
+      const allSessionRow = browser.render(80).find((line: string) => line.includes("/history/0"));
+      expect(allSessionRow).toContain("MiniMax-M3");
+      expect(allSessionRow).toContain("high");
+      expect(allSessionRow.trimEnd()).toEndWith(parentSessionId.slice(-8));
+
+      const firstAgentPage = await tools.get("list_agents").execute("list-1", {}, undefined, undefined, ctx);
+      const firstAgentPayload = JSON.parse(firstAgentPage.content[0].text);
+      expect(firstAgentPayload).toMatchObject({ total: 12, returned: 10, offset: 0, limit: 10, next_offset: 10 });
+      expect(firstAgentPayload.agents[0]).toEqual({ agent_name: "/history/0", agent_status: "running" });
+      expect(firstAgentPage.content[0].text).not.toContain("private task context");
+      const secondAgentPage = await tools.get("list_agents").execute("list-2", { offset: 10 }, undefined, undefined, ctx);
+      expect(JSON.parse(secondAgentPage.content[0].text)).toMatchObject({ total: 12, returned: 2, offset: 10, next_offset: null });
+
+      const spawnResult = await tools.get("spawn_agent").execute("spawn-1", {
+        task_name: "x".repeat(200),
+        message: "slow finish",
+      }, undefined, undefined, ctx);
+
+      const spawnRendered = tools.get("spawn_agent").renderResult(spawnResult, {}, { fg: (_color: string, text: string) => text }).render(400);
+      expect(spawnRendered.join("\n").trim()).toBe(`✓ ${spawnResult.details.task_name} · test/fake · high`);
+
+      expect(widget).toBeFunction();
+      const theme = { fg: (_color: string, text: string) => text };
+      const lines = widget({}, theme).render(40);
+      expect(lines).toHaveLength(1);
+      expect(visibleWidth(lines[0])).toBeLessThanOrEqual(40);
+      expect(lines[0]).toContain("/subagents");
+
+      await waitUntil(() => sentMessages.length === 1);
+      expect(widget).toBeUndefined();
+      expect(sentMessages[0].options).toEqual({ deliverAs: "steer", triggerTurn: true });
+      expect(sentMessages[0].message.content).toContain("response:slow finish");
+
+      await tools.get("spawn_agent").execute("spawn-2", {
+        task_name: "large-output",
+        message: "large response",
+      }, undefined, undefined, ctx);
+      await waitUntil(() => sentMessages.length === 2);
+      const large = sentMessages[1].message;
+      expect(Buffer.byteLength(large.content, "utf8")).toBeLessThanOrEqual(50 * 1024);
+      expect(large.content).toContain("Output truncated");
+      expect(large.details.fullOutputPath).toBeString();
+      expect(fs.existsSync(large.details.fullOutputPath)).toBe(true);
+
+      await tools.get("spawn_agent").execute("spawn-3", {
+        task_name: "routed",
+        message: "slow finish",
+        model: "fireworks/accounts/fireworks/models/glm-5p2",
+        thinking: "max",
+      }, undefined, undefined, ctx);
+      expect(getAgent("routed", parentSessionId)).toMatchObject({
+        provider: "fireworks",
+        modelId: "accounts/fireworks/models/glm-5p2",
+        thinking: "max",
+      });
+      // A model the registry has, but neither list allows, is refused.
+      await expect(tools.get("spawn_agent").execute("spawn-4", { task_name: "not-enabled", message: "x", model: "anthropic/claude-opus-4-6" }, undefined, undefined, ctx))
+        .rejects.toThrow(/not in the configured spawn models/);
+
+      // An allowlisted model whose provider dropped out mid-session is refused at spawn time,
+      // covering both availability drift and schemas frozen before the session started.
+      availableModels.splice(availableModels.findIndex((entry) => entry.provider === "openai"), 1);
+      await expect(tools.get("spawn_agent").execute("spawn-5", { task_name: "gone", message: "x", model: "openai/gpt-5" }, undefined, undefined, ctx))
+        .rejects.toThrow(/not currently available/);
+
+      // Unconfigured takes both runtime arguments away again even though Pi still has enabledModels.
+      fs.writeFileSync(configFile, "{}");
+      await emit("session_start", { reason: "restart" });
+      expect(spawnArgs().model).toBeUndefined();
+      expect(spawnArgs().thinking).toBeUndefined();
+      expect(tools.get("spawn_agent").description).not.toContain("`model` takes one of the values");
+    } finally {
+      await emit("session_shutdown", { reason: "quit" });
+      fs.rmSync(scope, { recursive: true, force: true });
+      fs.rmSync(configFile, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+});
+
+describe("provider-scoped tool exposure", () => {
+  test("requires a tier, updates routes on provider switches, and refuses unavailable or unsupported routes", async () => {
+    installProviderRoutes();
+    process.env.PI_SUBAGENT_PI_BIN = FAKE_RPC_CHILD;
+    const handlers = new Map<string, any[]>();
+    let spawn: any;
+    const pi: any = {
+      on(name: string, handler: any) { handlers.set(name, [...(handlers.get(name) ?? []), handler]); },
+      registerTool(tool: any) { if (tool.name === "spawn_agent") spawn = tool; },
+      registerMessageRenderer() {}, registerCommand() {}, sendMessage() {},
+      getThinkingLevel: () => "off",
+      getActiveTools: () => ["read", "bash"],
+    };
+    const available: any[] = Object.entries(PROVIDER_AGENTS).flatMap(([provider, tiers]) =>
+      Object.values(tiers as any).map((route: any) => ({ provider, id: route.model, reasoning: true, thinkingLevelMap: { max: "max" } }))
+    );
+    const ctx: any = {
+      cwd: TEST_AGENT_DIR, mode: "rpc", model: { provider: "openai", id: "parent-model" },
+      modelRegistry: { getAvailable: () => available },
+      sessionManager: { getSessionId: () => "scoped-tool-parent" },
+      ui: { notify() {} },
+    };
+    const emit = async (name: string) => { for (const handler of handlers.get(name) ?? []) await handler({}, ctx); };
+    const { default: extension } = await import("./index.js");
+    extension(pi);
+    const call = (params: any) => spawn.execute("call", { task_name: "bad-route", message: "hold", ...params }, undefined, undefined, ctx);
+    try {
+      await emit("session_start");
+      expect(spawn.parameters.required).toContain("agent_type");
+      expect(spawn.parameters.properties.agent_type.enum).toEqual(["light", "medium", "high", "max"]);
+      expect(spawn.parameters.properties.model).toBeUndefined();
+      expect(spawn.parameters.properties.thinking).toBeUndefined();
+      expect(spawn.description).toContain("openai/gpt-5.6-terra");
+      await expect(call({})).rejects.toThrow("agent_type is required");
+      await expect(call({ agent_type: "reviewer" })).rejects.toThrow("not configured");
+      await expect(call({ agent_type: "light", model: "radius/claude-haiku-5-5" })).rejects.toThrow("do not allow model or thinking overrides");
+      await expect(call({ agent_type: "light", thinking: "off" })).rejects.toThrow("do not allow model or thinking overrides");
+      for (const provider of ["openai", "anthropic", "radius"]) {
+        ctx.model = { provider, id: "parent-model" };
+        await emit("model_select");
+        expect(spawn.description).toContain(`${provider}/${PROVIDER_AGENTS[provider].light.model}`);
+        const result = await call({ task_name: provider, agent_type: "light" });
+        expect(result.details).toMatchObject({ provider, modelId: PROVIDER_AGENTS[provider].light.model, thinking: "max" });
+      }
+      available.splice(0, available.length, ...available.filter((model) => model.provider !== "anthropic"));
+      ctx.model = { provider: "anthropic", id: "parent-model" };
+      await expect(call({ agent_type: "light" })).rejects.toThrow("not currently available");
+      ctx.model = { provider: "openai-codex", id: "parent-model" };
+      await expect(call({ agent_type: "light" })).rejects.toThrow("not configured");
+      ctx.model = { provider: "openai", id: "parent-model" };
+      delete available.find((model) => model.provider === "openai" && model.id === "gpt-6-luna").thinkingLevelMap.max;
+      await expect(call({ agent_type: "light" })).rejects.toThrow('does not support thinking "max"');
+    } finally {
+      await emit("session_shutdown");
+      fs.rmSync(ROUTING_CONFIG_FILE, { force: true });
+      delete process.env.PI_SUBAGENT_PI_BIN;
+    }
+  });
+});
+
+describe("completion mailbox", () => {
+  test("waits until explicitly cancelled when no completion exists", async () => {
+    const manager = new AgentManager();
+    const controller = new AbortController();
+    setTimeout(() => controller.abort(new Error("cancelled")), 10);
+    await expect(manager.waitAgent("empty-parent", undefined, controller.signal)).rejects.toThrow("cancelled");
+    await manager.shutdown();
+  });
+
+  test("consumes one matching completion without dropping siblings", () => {
+    const events = [
+      { id: "1", parentSessionId: "parent", agentName: "/one", status: "completed", createdAt: 1 },
+      { id: "2", parentSessionId: "parent", agentName: "/two", status: "completed", createdAt: 2 },
+      { id: "3", parentSessionId: "other", agentName: "/one", status: "completed", createdAt: 3 },
+    ] as any[];
+    expect(consumeFirstMatchingMailboxEvent(events, "parent")?.agentName).toBe("/one");
+    expect(events.map((event) => event.id)).toEqual(["2", "3"]);
+    expect(consumeFirstMatchingMailboxEvent(events, "parent", new Set(["/two"]))?.agentName).toBe("/two");
+    expect(events.map((event) => event.id)).toEqual(["3"]);
+  });
+});

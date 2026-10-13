@@ -1,6 +1,12 @@
 {
   "name": "dotfiles-pi",
   "private": true,
+  "scripts": {
+    "test:subagents": "npx --yes bun@1.4.3 test agent/extensions/codex-subagents/core.test.ts && npx --yes bun@1.4.3 test agent/extensions/codex-subagents/peek.test.ts"
+  },
+  "overrides": {
+    "@earendil-works/pi-codemode": "1.1.0"
+  },
   "devDependencies": {
     "@earendil-works/pi-ai": "1.1.0",
     "@earendil-works/pi-coding-agent": "1.1.0",
