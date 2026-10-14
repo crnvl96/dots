@@ -7,6 +7,8 @@ import {
   normalizeWebUrl,
   parseFetchResponse,
   parseSearchResults,
+  toFetchStructuredContent,
+  toSearchStructuredContent,
   totalCostUsd,
 } from './responses.ts';
 
@@ -235,4 +237,64 @@ test('totalCostUsd requires nested record metadata and a numeric total', () => {
   assert.equal(totalCostUsd({ usage: { cost: { total_cost: -0.125 } } }), -0.125);
   assert.equal(totalCostUsd({ usage: { cost: { total_cost: Number.POSITIVE_INFINITY } } }), Number.POSITIVE_INFINITY);
   assert.equal(totalCostUsd({ usage: { cost: { total_cost: Number.NaN } } }), Number.NaN);
+});
+
+test('toSearchStructuredContent passes fields through and defaults missing dates to null', () => {
+  assert.deepEqual(
+    toSearchStructuredContent('pi agent', [
+      {
+        title: 'Full',
+        url: 'https://full.example',
+        snippet: 'Excerpt.',
+        date: '2025-01-02',
+        last_updated: '2025-02-03',
+      },
+      { title: 'Sparse', url: 'https://sparse.example', snippet: '' },
+      { title: 'Nulls', url: 'https://nulls.example', snippet: 'x', date: null, last_updated: null },
+    ]),
+    {
+      query: 'pi agent',
+      results: [
+        {
+          title: 'Full',
+          url: 'https://full.example',
+          snippet: 'Excerpt.',
+          date: '2025-01-02',
+          last_updated: '2025-02-03',
+        },
+        { title: 'Sparse', url: 'https://sparse.example', snippet: '', date: null, last_updated: null },
+        { title: 'Nulls', url: 'https://nulls.example', snippet: 'x', date: null, last_updated: null },
+      ],
+    },
+  );
+});
+
+test('toSearchStructuredContent handles an empty results array', () => {
+  assert.deepEqual(toSearchStructuredContent('quiet query', []), { query: 'quiet query', results: [] });
+});
+
+test('toFetchStructuredContent maps all populated fields', () => {
+  assert.deepEqual(
+    toFetchStructuredContent('https://requested.example/page', {
+      content: { url: 'https://canonical.example/page', title: 'Example article', snippet: 'Page text.' },
+      assistantText: 'Fetched the page.',
+    }),
+    {
+      url: 'https://requested.example/page',
+      source_url: 'https://canonical.example/page',
+      title: 'Example article',
+      content: 'Page text.',
+      notes: 'Fetched the page.',
+    },
+  );
+});
+
+test('toFetchStructuredContent uses null for everything missing when only notes are present', () => {
+  assert.deepEqual(toFetchStructuredContent('https://requested.example/page', { assistantText: 'Only a note.' }), {
+    url: 'https://requested.example/page',
+    source_url: null,
+    title: null,
+    content: null,
+    notes: 'Only a note.',
+  });
 });

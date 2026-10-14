@@ -10,10 +10,13 @@ Export `PERPLEXITY_API_KEY` in the environment that starts Pi, then restart Pi.
 Optionally set `PERPLEXITY_API_BASE_URL` to override `https://api.perplexity.ai`.
 Requests have a 60-second timeout and respect tool cancellation.
 
-Large outputs use Pi's standard line/byte limits. When truncated, the full
-Markdown is saved to a temporary `output.md` file and its path is included in
-the result. Both tools remind the model to treat external text as untrusted and
+Large outputs are limited to 1000 lines or 25KB (half of Pi's defaults, to keep
+web content lean). When truncated, the full Markdown is saved to a temporary
+`output.md` file and its path is included in the result. Both tools remind the model to treat external text as untrusted and
 to cite source URLs.
+
+Both tools declare an `outputSchema`, so codemode scripts receive structured,
+untruncated results instead of the Markdown text.
 
 ## Code map
 
@@ -21,7 +24,7 @@ to cite source URLs.
 - **`search.ts`** — search schema, execution, result details, and UI rendering.
 - **`fetch.ts`** — fetch schema, execution, result details, and UI rendering.
 - **`client.ts`** — authenticated POST requests, cancellation, and API errors.
-- **`responses.ts`** — URL validation, response parsing, and Markdown formatting.
+- **`responses.ts`** — URL validation, response parsing, structured results, and Markdown formatting.
 - **`output.ts`** — Pi truncation and full-output file persistence.
 
 Start with the relevant tool file and follow its imports for shared behavior.

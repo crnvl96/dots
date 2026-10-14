@@ -15,6 +15,53 @@ export interface FetchContent {
   snippet: string;
 }
 
+// Structured results for programmatic callers (codemode scripts). Plain JSON, no undefined.
+
+export type SearchStructuredContent = {
+  query: string;
+  results: {
+    title: string;
+    url: string;
+    snippet: string;
+    date: string | null;
+    last_updated: string | null;
+  }[];
+};
+
+export type FetchStructuredContent = {
+  url: string;
+  source_url: string | null;
+  title: string | null;
+  content: string | null;
+  notes: string | null;
+};
+
+export function toSearchStructuredContent(query: string, results: SearchResult[]): SearchStructuredContent {
+  return {
+    query,
+    results: results.map((result) => ({
+      title: result.title,
+      url: result.url,
+      snippet: result.snippet,
+      date: result.date ?? null,
+      last_updated: result.last_updated ?? null,
+    })),
+  };
+}
+
+export function toFetchStructuredContent(
+  url: string,
+  parsed: { content?: FetchContent; assistantText?: string },
+): FetchStructuredContent {
+  return {
+    url,
+    source_url: parsed.content?.url ?? null,
+    title: parsed.content?.title ?? null,
+    content: parsed.content?.snippet ?? null,
+    notes: parsed.assistantText ?? null,
+  };
+}
+
 // Search responses
 
 export function parseSearchResults(payload: Record<string, unknown>): SearchResult[] {
