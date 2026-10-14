@@ -1,8 +1,8 @@
 {
   "lastChangelogVersion": "1.2.0",
   "theme": "system",
-  "defaultProvider": "openai",
-  "defaultModel": "gpt-6.1-sol",
+  "defaultProvider": "radius",
+  "defaultModel": "auto",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "collapseChangelog": true,
