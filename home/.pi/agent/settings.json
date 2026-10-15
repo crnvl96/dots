@@ -1,6 +1,7 @@
 {
   "lastChangelogVersion": "1.2.0",
   "theme": "system",
+  "editorPaddingX": 1,
   "defaultProvider": "radius",
   "defaultModel": "auto",
   "defaultThinkingLevel": "high",
