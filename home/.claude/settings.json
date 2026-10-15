@@ -18,7 +18,16 @@
   },
   "enabledPlugins": {
     "cc-plugin-you-should-know@builtin": true,
-    "cc-plugin-diff@builtin": true
+    "cc-plugin-diff@builtin": false,
+    "cc-plugin-agents-md@builtin": false,
+    "cc-plugin-plugin-authoring@builtin": false,
+    "cc-plugin-sec-default@builtin": false,
+    "cc-plugin-telemetry@builtin": false
+  },
+  "modelSettings": {
+    "claude-opus-5-5": {
+      "effortLevel": "high"
+    }
   },
   "promptSuggestionEnabled": false,
   "awaySummaryEnabled": false,
@@ -28,10 +37,5 @@
   "autoContinueAtUsageLimit": false,
   "fileCheckpointingEnabled": false,
   "inputNeededNotifEnabled": false,
-  "agentPushNotifEnabled": false,
-  "modelSettings": {
-    "claude-opus-5-5": {
-      "effortLevel": "high"
-    }
-  }
+  "agentPushNotifEnabled": false
 }
