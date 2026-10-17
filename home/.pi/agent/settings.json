@@ -2,6 +2,8 @@
   "lastChangelogVersion": "1.3.0",
   "theme": "system",
   "editorPaddingX": 1,
+  "defaultProvider": "radius",
+  "defaultModel": "glm-5.3-flash",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "collapseChangelog": true,
