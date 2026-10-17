@@ -32,3 +32,5 @@ vim.o.smartcase = true
 vim.o.smartindent = true
 vim.o.tabstop = 2
 vim.o.virtualedit = 'block'
+
+vim.opt.fillchars:append({ eob = ' ' })
