@@ -2,8 +2,6 @@
   "lastChangelogVersion": "1.3.0",
   "theme": "system",
   "editorPaddingX": 1,
-  "defaultProvider": "claude-bridge",
-  "defaultModel": "claude-opus-5-5",
   "defaultThinkingLevel": "high",
   "hideThinkingBlock": true,
   "collapseChangelog": true,
@@ -16,7 +14,5 @@
     "+codemode"
   ],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
-  "packages": [
-    "npm:pi-claude-bridge"
-  ]
+  "packages": []
 }
