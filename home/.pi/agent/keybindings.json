@@ -1,11 +1,1 @@
-{
-  "tui.editor.historyPrevious": ["ctrl+p"],
-  "tui.editor.historyNext": ["ctrl+n"],
-  "tui.select.up": ["up", "ctrl+p"],
-  "tui.select.down": ["down", "ctrl+n"],
-  "app.session.toggleNamedFilter": ["ctrl+l"],
-  "app.session.togglePath": ["ctrl+f"],
-  "app.model.cycleForward": ["alt+p"],
-  "app.model.select": ["ctrl+l", "super+p"],
-  "app.message.copy": ["ctrl+y"]
-}
+{}

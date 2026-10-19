@@ -29,4 +29,5 @@ vim.pack.add({
   'https://github.com/stevearc/conform.nvim',
   'https://github.com/saghen/blink.lib',
   'https://github.com/saghen/blink.cmp',
+  'https://github.com/meanderingprogrammer/render-markdown.nvim',
 })
