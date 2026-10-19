@@ -8,14 +8,6 @@
     },
     "fff": {
       "command": "/Users/velozient/.local/bin/fff-mcp"
-    },
-    "atlassian": {
-      "url": "https://mcp.atlassian.com/v2/mcp",
-      "description": "Atlassian Jira, Confluence, and Bitbucket tools"
-    },
-    "notion": {
-      "url": "https://mcp.notion.com/mcp",
-      "description": "Search, read, and update Notion workspace content"
     }
   }
 }

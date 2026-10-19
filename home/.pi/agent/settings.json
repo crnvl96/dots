@@ -17,8 +17,7 @@
   ],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [
-    "https://github.com/earendil-works/pi-claude-code",
-    "git:github.com/earendil-works/pi-review"
+    "https://github.com/earendil-works/pi-claude-code"
   ],
   "enabledModels": [
     "radius/gpt-5.6-luna",
