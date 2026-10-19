@@ -16,5 +16,5 @@ metadata:
 
 **When launching instances of coding agents (claude code, pi, etc...)**
 
-- Always launch iteractive sessions by default.
+- Don't use the `-p`/`--print` flag on pi and claude code; Always launch interactively.
 - Inherit the parameters (provider, model, thinking level, etc..) from the parent unless the user requests for specific parameters.
