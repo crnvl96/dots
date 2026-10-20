@@ -5,9 +5,6 @@
       "auth": {
         "provider": "radius"
       }
-    },
-    "fff": {
-      "command": "/Users/velozient/.local/bin/fff-mcp"
     }
   }
 }
