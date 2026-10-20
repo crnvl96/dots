@@ -1,1 +1,1 @@
-rex.bind('cmd+z', 'pane.zoom')
+-- rex.bind('cmd+z', 'pane.zoom')

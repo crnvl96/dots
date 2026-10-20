@@ -9,6 +9,6 @@
     "test": "node --test *.test.ts"
   },
   "pi": {
-    "extensions": ["./index.ts"]
+    "extensions": ["./perplexity.ts"]
   }
 }

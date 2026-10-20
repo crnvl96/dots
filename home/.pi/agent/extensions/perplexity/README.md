@@ -2,7 +2,8 @@
 
 Adds `perplexity_search` (ranked web results with excerpts) and
 `perplexity_fetch` (content from a known HTTP/HTTPS URL). Pi discovers this
-folder through `index.ts`.
+folder through the `pi.extensions` entry in `package.json`, which points to
+`perplexity.ts`.
 
 ## Configuration
 
@@ -20,7 +21,7 @@ untruncated results instead of the Markdown text.
 
 ## Code map
 
-- **`index.ts`** — entrypoint; registers search, then fetch.
+- **`perplexity.ts`** — entrypoint; registers search, then fetch.
 - **`search.ts`** — search schema, execution, result details, and UI rendering.
 - **`fetch.ts`** — fetch schema, execution, result details, and UI rendering.
 - **`client.ts`** — authenticated POST requests, cancellation, and API errors.
@@ -28,7 +29,7 @@ untruncated results instead of the Markdown text.
 - **`output.ts`** — Pi truncation and full-output file persistence.
 
 Start with the relevant tool file and follow its imports for shared behavior.
-The input types remain exported from `index.ts`.
+The input types remain exported from `perplexity.ts`.
 
 ## Tests
 

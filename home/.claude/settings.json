@@ -5,7 +5,11 @@
     "sessionUrl": false
   },
   "permissions": {
-    "defaultMode": "auto"
+    "defaultMode": "auto",
+    "deny": [
+      "Glob",
+      "Grep"
+    ]
   },
   "model": "opus",
   "disableBundledSkills": false,
