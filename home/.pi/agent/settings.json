@@ -15,16 +15,5 @@
   "defaultTools": [
     "+codemode"
   ],
-  "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
-  "packages": [
-    "https://github.com/earendil-works/pi-claude-code"
-  ],
-  "enabledModels": [
-    "claude-code/claude-opus-5-5",
-    "claude-code/claude-fable-5-1",
-    "claude-code/claude-sonnet-5-5",
-    "claude-code/claude-haiku-5-5",
-    "radius/glm-5.3",
-    "radius/gpt-6.1-sol"
-  ]
+  "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c"
 }
