@@ -15,9 +15,9 @@
 // Both tools declare an outputSchema, so codemode scripts receive structured,
 // untruncated results instead of the Markdown text.
 //
-// Tests live in agent/perplexity.test.ts (outside this directory so Pi does
-// not load them as an extension). Run them with `npm run test:perplexity`
-// from home/.pi.
+// Tests live in tests/perplexity.test.ts (kept out of the extensions
+// directory so Pi does not load them as an extension). Run them with
+// `npm run test:perplexity` from home/.pi.
 
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

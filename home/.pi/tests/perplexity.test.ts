@@ -1,6 +1,6 @@
 // Tests for the Perplexity extension (agent/extensions/perplexity.ts).
-// This file lives outside the extensions directory so Pi does not load it as
-// an extension. Run with `npm run test:perplexity` from home/.pi.
+// This file lives in the tests/ directory so Pi does not load it as an
+// extension. Run with `npm run test:perplexity` from home/.pi.
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
@@ -15,7 +15,7 @@ import {
   toFetchStructuredContent,
   toSearchStructuredContent,
   totalCostUsd,
-} from './extensions/perplexity.ts';
+} from '../agent/extensions/perplexity.ts';
 
 // Transport (client)
 
