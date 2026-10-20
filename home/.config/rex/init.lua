@@ -1,1 +1,0 @@
--- rex.bind('cmd+z', 'pane.zoom')
