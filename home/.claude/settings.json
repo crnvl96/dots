@@ -12,7 +12,7 @@
     ]
   },
   "model": "opus",
-  "disableBundledSkills": false,
+  "disableBundledSkills": true,
   "hooks": {
     "SessionStart": [
       {
