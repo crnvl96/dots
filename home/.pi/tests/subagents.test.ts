@@ -1,0 +1,933 @@
+// Run from home/.pi: npm run test:subagents
+// Uses the real in-process Agent with controlled provider streams; no network or pi subprocess.
+import assert from 'node:assert/strict';
+import fsPromises, { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { syncBuiltinESMExports } from 'node:module';
+import { tmpdir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { setImmediate } from 'node:timers/promises';
+import test from 'node:test';
+import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
+import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
+import extension from '../agent/extensions/subagents.pi.ts';
+
+const parentModel = {
+  id: 'parent-model', provider: 'parent-provider', api: 'openai-completions',
+  name: 'Parent', reasoning: true, input: ['text'], contextWindow: 100_000, maxTokens: 8192,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+};
+const childModel = { ...parentModel, id: 'child-model', provider: 'child-provider' };
+
+async function until(predicate) {
+  for (let i = 0; i < 100; i++) {
+    if (predicate()) return;
+    await setImmediate();
+  }
+  assert.fail('Expected asynchronous condition was not reached');
+}
+
+function harness(t, mode = 'print', renderer) {
+  const tools = new Map();
+  const events = new Map();
+  const commands = new Map();
+  const shortcuts = new Map();
+  const widgets = new Map();
+  const dialogs = [];
+  const notices = [];
+  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const kb = new KeybindingsManager({ ...TUI_KEYBINDINGS,
+    'app.thinking.toggle': { defaultKeys: 'ctrl+t' }, 'app.tools.expand': { defaultKeys: 'ctrl+o' },
+  });
+  let renders = 0;
+  const tui = renderer ?? { terminal: { rows: 32, columns: 100 }, requestRender() { renders++; } };
+  const ui = {
+    theme,
+    setWidget(name, factory) {
+      widgets.get(name)?.dispose();
+      if (factory) widgets.set(name, factory(tui, theme));
+      else widgets.delete(name);
+    },
+    notify(text, level) { notices.push({ text, level }); },
+    custom(factory, options) {
+      return new Promise((resolve) => {
+        const dialog = { closed: false, options };
+        const done = () => {
+          if (dialog.closed) return;
+          dialog.closed = true;
+          dialog.handle?.hide();
+          dialog.component?.dispose();
+          resolve();
+        };
+        dialog.component = factory(tui, theme, kb, done);
+        dialog.component.focused = true;
+        if (renderer) dialog.handle = renderer.showOverlay(dialog.component, options.overlayOptions);
+        dialogs.push(dialog);
+      });
+    },
+  };
+  initTheme('dark', false);
+  const notifications = [];
+  const requests = [];
+  const nested = [];
+  const active = ['read', 'subagents_launch', 'subagents_steer'];
+  const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
+  const ctx = {
+    mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
+    cwd: process.cwd(),
+    model: parentModel,
+    thinkingLevel: 'medium',
+    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer'].map((name) => ({
+      name, label: name, description: name, parameters: schema,
+      execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
+    })),
+    async executeTool(name, args, options) {
+      nested.push({ name, args, options });
+      return { result: { content: [{ type: 'text', text: 'permission denied' }], details: { checked: true } }, isError: true };
+    },
+    modelRegistry: {
+      find(provider, id) {
+        return [parentModel, childModel].find((model) => model.provider === provider && model.id === id);
+      },
+      streamSimple(model, context, options) {
+        const stream = createAssistantMessageEventStream();
+        const request = {
+          model, context: structuredClone(context), options, stream,
+          finish(text = 'done', stopReason = 'stop', extra = {}) {
+            const message = {
+              role: 'assistant', content: [{ type: 'text', text }],
+              api: model.api, provider: model.provider, model: model.id,
+              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+              stopReason, timestamp: Date.now(), ...extra,
+            };
+            stream.push(stopReason === 'error' || stopReason === 'aborted'
+              ? { type: 'error', reason: stopReason, error: message }
+              : { type: 'done', reason: stopReason, message });
+            stream.end();
+          },
+        };
+        options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), { once: true });
+        requests.push(request);
+        return stream;
+      },
+    },
+  };
+  const pi = {
+    registerTool(tool) { tools.set(tool.name, tool); },
+    registerCommand(name, command) { commands.set(name, command); },
+    registerShortcut(key, shortcut) { shortcuts.set(key, shortcut); },
+    on(event, handler) { events.set(event, handler); },
+    getActiveTools() { return active; },
+    getThinkingLevel() { return 'low'; },
+    sendMessage(message, options) { notifications.push({ message, options }); },
+  };
+  extension(pi);
+  const call = (name, params, signal) => tools.get(name).execute('parent-call', params, signal, undefined, ctx);
+  const launch = (tasks, signal) => call('subagents_launch', { tasks }, signal);
+  const steer = (id, prompt) => call('subagents_steer', { id, prompt });
+  t.after(() => events.get('session_shutdown')());
+  const open = (args = '') => commands.get('subagents').handler(args, ctx);
+  return { tools, events, commands, shortcuts, widgets, dialogs, notices, tui, open,
+    get renders() { return renders; }, notifications, requests, nested, active, ctx, pi, call, launch, steer };
+}
+
+function system(request) {
+  return request.context.messages.find((message) => message.role === 'system') ?? { content: '', toolsAdded: [] };
+}
+
+function userTexts(request) {
+  return request.context.messages.filter((message) => message.role === 'user').map((message) => (
+    typeof message.content === 'string' ? message.content : message.content.map((part) => part.text).join('\n')
+  ));
+}
+
+test('loads through Pi’s real extension loader', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'pi-subagents-test-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const loader = new DefaultResourceLoader({
+    cwd: directory, agentDir: directory, settingsManager: SettingsManager.inMemory(),
+    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+    additionalExtensionPaths: [fileURLToPath(new URL('../agent/extensions/subagents.pi.ts', import.meta.url))],
+  });
+  await loader.reload();
+  const result = loader.getExtensions();
+  assert.deepEqual(result.errors, []);
+  assert.equal(result.extensions.length, 1);
+  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer']);
+  assert.ok(result.extensions[0].commands.has('subagents'));
+  assert.ok(result.extensions[0].shortcuts.has('ctrl+shift+a'));
+});
+
+test('registers only launch and steer tools', (t) => {
+  const h = harness(t);
+  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer']);
+});
+
+test('launch returns IDs without waiting; children run in parallel and notify out of order exactly once', async (t) => {
+  const h = harness(t);
+  const result = await h.launch([{ prompt: 'first task' }, { prompt: 'second task' }]);
+  const [firstId, secondId] = result.details.ids;
+  assert.notEqual(firstId, secondId);
+  assert.equal(h.notifications.length, 0);
+  await until(() => h.requests.length === 2);
+  assert.notEqual(h.requests[0].options.sessionId, h.requests[1].options.sessionId);
+
+  h.requests[1].finish('second answer');
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.id, secondId);
+  assert.match(h.notifications[0].message.content, /second answer/);
+  assert.deepEqual(h.notifications[0].options, { triggerTurn: true, deliverAs: 'followUp' });
+  assert.equal(h.notifications[0].message.display, true);
+  assert.equal(h.notifications[0].message.customType, 'subagents.pi');
+
+  h.requests[0].finish('first answer');
+  await until(() => h.notifications.length === 2);
+  assert.equal(h.notifications[1].message.details.id, firstId);
+  assert.match(h.notifications[1].message.content, /first answer/);
+  await assert.rejects(h.steer(firstId, 'too late'), /not running/);
+  assert.equal(h.notifications.length, 2);
+});
+
+test('passes model, provider, thinking, exact tools, system prompt and prompt to the real Agent', async (t) => {
+  const h = harness(t);
+  await h.launch([{
+    prompt: 'my task', provider: childModel.provider, model: childModel.id,
+    thinkingLevel: 'high', tools: ['perplexity_search'], systemPrompt: 'Custom system instructions',
+  }]);
+  await until(() => h.requests.length === 1);
+  const request = h.requests[0];
+  assert.equal(request.model, childModel);
+  assert.equal(request.options.reasoning, 'high');
+  assert.equal(system(request).content, 'Custom system instructions');
+  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['perplexity_search']);
+  assert.deepEqual(userTexts(request), ['my task']);
+  request.finish('custom answer');
+  await until(() => h.notifications.length === 1);
+});
+
+test('inherits model/thinking and active callable tools, without leaking inactive sibling tools or parent history', async (t) => {
+  const h = harness(t);
+  await h.launch([{ prompt: 'default task' }, { prompt: 'explicit task', tools: ['perplexity_search'] }]);
+  await until(() => h.requests.length === 2);
+  const request = h.requests[0];
+  assert.equal(request.model, parentModel);
+  assert.equal(request.options.reasoning, 'medium');
+  assert.match(system(request).content, /general-purpose subagent/);
+  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['read']);
+  assert.deepEqual(userTexts(request), ['default task']);
+  h.requests.forEach((request) => request.finish());
+  await until(() => h.notifications.length === 2);
+});
+
+test('explicit empty tools and empty system prompt are respected; thinking falls back to pi', async (t) => {
+  const h = harness(t);
+  delete h.ctx.thinkingLevel;
+  await h.launch([{ prompt: 'no tools', tools: [], thinkingLevel: 'off', systemPrompt: '' }, { prompt: 'fallback' }]);
+  await until(() => h.requests.length === 2);
+  assert.deepEqual(system(h.requests[0]).toolsAdded ?? [], []);
+  assert.equal(system(h.requests[0]).content, '');
+  assert.equal(h.requests[0].options.reasoning, undefined); // Agent maps off to no reasoning.
+  assert.equal(h.requests[1].options.reasoning, 'low');
+});
+
+test('parallel launch calls keep independent IDs and state', async (t) => {
+  const h = harness(t);
+  const results = await Promise.all([h.launch([{ prompt: 'a' }]), h.launch([{ prompt: 'b' }])]);
+  assert.notEqual(results[0].details.ids[0], results[1].details.ids[0]);
+  await until(() => h.requests.length === 2);
+  h.requests.forEach((request) => request.finish());
+  await until(() => h.notifications.length === 2);
+});
+
+test('steering reaches the running child on its next request, not the parent', async (t) => {
+  const h = harness(t);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'original task' }]);
+  await until(() => h.requests.length === 1);
+  await h.steer(id, 'focus on tests instead');
+  assert.equal(h.requests.length, 1);
+  h.requests[0].finish('initial response');
+  await until(() => h.requests.length === 2);
+  assert.deepEqual(userTexts(h.requests[1]), ['original task', 'focus on tests instead']);
+  assert.equal(h.notifications.length, 0);
+  h.requests[1].finish('steered final response');
+  await until(() => h.notifications.length === 1);
+  assert.match(h.notifications[0].message.content, /steered final response/);
+  assert.doesNotMatch(h.notifications[0].message.content, /initial response/);
+});
+
+test('delegated tools use parent hooks with the child signal and preserve error results', async (t) => {
+  const h = harness(t);
+  const controller = new AbortController();
+  await h.launch([{ prompt: 'read a file', tools: ['read'] }], controller.signal);
+  await until(() => h.requests.length === 1);
+  controller.abort(); // A background job is not owned by the parent's finished tool call.
+  assert.equal(h.requests[0].options.signal.aborted, false);
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'toolCall', id: 'child-read', name: 'read', arguments: { path: 'example.ts' } }],
+  });
+  await until(() => h.requests.length === 2);
+  assert.equal(h.nested.length, 1);
+  assert.equal(h.nested[0].name, 'read');
+  assert.deepEqual(h.nested[0].args, { path: 'example.ts' });
+  assert.equal(h.nested[0].options.signal, h.requests[0].options.signal);
+  assert.notEqual(h.nested[0].options.signal, controller.signal);
+  const toolResult = h.requests[1].context.messages.find((message) => message.role === 'toolResult');
+  assert.equal(toolResult.isError, true);
+  assert.equal(toolResult.content[0].text, 'permission denied');
+  h.requests[1].finish('reported denial');
+  await until(() => h.notifications.length === 1);
+});
+
+test('steering during a child tool execution waits for that tool, then changes the next turn', async (t) => {
+  const h = harness(t);
+  let release;
+  let toolStarted = false;
+  const toolFinished = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  h.ctx.executeTool = async () => {
+    toolStarted = true;
+    await toolFinished;
+    return { result: { content: [{ type: 'text', text: 'file read' }], details: undefined }, isError: false };
+  };
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'inspect files' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'toolCall', id: 'reading', name: 'read', arguments: { path: 'file.ts' } }],
+  });
+  await until(() => toolStarted);
+  await h.steer(id, 'only report the tests');
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.notifications.length, 0);
+  release();
+  await until(() => h.requests.length === 2);
+  assert.deepEqual(userTexts(h.requests[1]), ['inspect files', 'only report the tests']);
+  h.requests[1].finish('test report');
+  await until(() => h.notifications.length === 1);
+});
+
+test('validates the entire batch before starting any child', async (t) => {
+  const h = harness(t);
+  for (const invalid of [
+    { prompt: 'bad model', model: 'does-not-exist' },
+    { prompt: 'bad provider', provider: 'does-not-exist' },
+    { prompt: 'bad tool', tools: ['does-not-exist'] },
+    { prompt: 'no recursion', tools: ['subagents_launch'] },
+    { prompt: 'no orchestration', tools: ['subagents_steer'] },
+    { prompt: '   ' },
+  ]) {
+    await assert.rejects(h.launch([{ prompt: 'valid' }, invalid]));
+  }
+  await assert.rejects(h.launch([]), /At least one/);
+  await assert.rejects(h.steer('missing', 'hello'), /not running/);
+  await assert.rejects(h.steer('missing', '  '), /must not be blank/);
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(h.launch([{ prompt: 'cancelled launch' }], controller.signal), /abort/i);
+  assert.equal(h.requests.length, 0);
+  assert.equal(h.notifications.length, 0);
+});
+
+test('reports provider failure once, including error details and any text response', async (t) => {
+  const h = harness(t);
+  await h.launch([{ prompt: 'fail' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('partial output', 'error', { errorMessage: 'quota exhausted' });
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.status, 'failed');
+  assert.match(h.notifications[0].message.content, /quota exhausted/);
+  assert.match(h.notifications[0].message.content, /partial output/);
+});
+
+for (const stopReason of ['error', 'aborted']) {
+  test(`queued steering cannot restart a provider ${stopReason}`, async (t) => {
+    const h = harness(t);
+    const { details: { ids: [id] } } = await h.launch([{ prompt: 'must fail once' }]);
+    await until(() => h.requests.length === 1);
+    await h.steer(id, 'do not implicitly restart after a hard exit');
+    h.requests[0].finish('partial output', stopReason, { errorMessage: 'hard exit' });
+    await until(() => h.notifications.length === 1);
+    assert.equal(h.requests.length, 1);
+    assert.equal(h.notifications[0].message.details.status, 'failed');
+    assert.match(h.notifications[0].message.content, /hard exit/);
+    await assert.rejects(h.steer(id, 'too late'), /not running/);
+  });
+}
+
+test('reports a thrown provider exception without an unhandled rejection', async (t) => {
+  const h = harness(t);
+  h.ctx.modelRegistry.streamSimple = () => { throw new Error('broken provider'); };
+  await h.launch([{ prompt: 'fail' }]);
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.status, 'failed');
+  assert.match(h.notifications[0].message.content, /broken provider/);
+});
+
+for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
+  test(`${event} aborts children, suppresses stale notifications, and is idempotent`, async (t) => {
+    const h = harness(t);
+    const { details: { ids: [id] } } = await h.launch([{ prompt: 'still running' }]);
+    await until(() => h.requests.length === 1);
+    await h.events.get(event)();
+    assert.equal(h.requests[0].options.signal.aborted, true);
+    assert.equal(h.notifications.length, 0);
+    await assert.rejects(h.steer(id, 'stale'), /not running/);
+    await h.events.get(event)();
+  });
+}
+
+test('large responses are truncated with the complete answer saved to a file', async (t) => {
+  const h = harness(t);
+  await h.launch([{ prompt: 'long answer' }]);
+  await until(() => h.requests.length === 1);
+  const answer = 'a long response\n'.repeat(3000);
+  h.requests[0].finish(answer);
+  await until(() => h.notifications.length === 1);
+  const { content, details } = h.notifications[0].message;
+  t.after(() => rm(dirname(details.fullOutputPath), { recursive: true, force: true }));
+  assert.match(content, /Output truncated/);
+  assert.ok(content.length < answer.length);
+  const full = await readFile(details.fullOutputPath, 'utf8');
+  assert.ok(full.endsWith(answer));
+});
+
+function screen(component, width = 96) {
+  return component.render(width).map(stripTerminalSequences).join('\n');
+}
+
+function streamPartial(request, text, thinking = '') {
+  const partial = {
+    role: 'assistant', api: request.model.api, provider: request.model.provider, model: request.model.id,
+    content: [...(thinking ? [{ type: 'thinking', thinking }] : []), { type: 'text', text }],
+    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    stopReason: 'stop', timestamp: Date.now(),
+  };
+  request.stream.push({ type: 'start', partial: structuredClone(partial) });
+  request.stream.push({ type: 'text_delta', contentIndex: thinking ? 1 : 0, delta: text, partial });
+  return partial;
+}
+
+function mouse(component, y, x = 1, width = 96) {
+  return component.handleMouse({ type: 'click', button: 'left', x, y, screenX: x, screenY: y,
+    width, height: component.render(width).length, shift: false, alt: false, ctrl: false });
+}
+
+test('TUI widget animates, advances timers, and stops ticking after completion', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 1_000 });
+  const h = harness(t, 'tui');
+  assert.equal(h.widgets.size, 0); // No UI/timers during extension discovery.
+  await h.launch([{ prompt: 'Explore the repository' }]);
+  await until(() => h.requests.length === 1);
+  const widget = h.widgets.get('subagents.pi');
+  const initial = screen(widget);
+  assert.match(initial, /1 running/);
+  assert.match(initial, /0:00/);
+  t.mock.timers.tick(100);
+  assert.notEqual(screen(widget), initial);
+  t.mock.timers.tick(60_900);
+  assert.match(screen(widget), /1:01/);
+  h.requests[0].finish('report');
+  await until(() => h.notifications.length === 1);
+  assert.match(screen(widget), /0 running.*1 finished/);
+  const renders = h.renders;
+  t.mock.timers.tick(5000);
+  assert.equal(h.renders, renders);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  assert.match(screen(panel), /1:01/); // Finished duration is frozen.
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+for (const mode of ['print', 'json', 'rpc']) {
+  test(`${mode} keeps background tools functional without terminal UI`, async (t) => {
+    const h = harness(t, mode);
+    await h.launch([{ prompt: 'headless' }]);
+    await until(() => h.requests.length === 1);
+    await h.open();
+    assert.equal(h.widgets.size, 0);
+    assert.equal(h.dialogs.length, 0);
+    assert.match(h.notices[0].text, /interactive TUI/);
+    h.requests[0].finish('headless result');
+    await until(() => h.notifications.length === 1);
+  });
+}
+
+test('dashboard shows live native messages, thinking, tools, errors, and completed transcripts', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect files' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id.slice(0, 8));
+  const panel = h.dialogs[0].component;
+  assert.match(screen(panel), /Inspect files/);
+  streamPartial(h.requests[0], 'Streaming response', 'Private reasoning');
+  await until(() => screen(panel).includes('Streaming response'));
+  assert.doesNotMatch(screen(panel), /Private reasoning/);
+  panel.handleInput('\x14'); // Ctrl+T uses the supplied application keybindings.
+  assert.match(screen(panel), /Private reasoning/);
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'text', text: 'Reading the source' }, { type: 'toolCall', id: 'read-ui', name: 'read', arguments: { path: 'source.ts' } }],
+  });
+  await until(() => h.requests.length === 2);
+  panel.handleInput('\x0f'); // Ctrl+O expands tool results.
+  assert.match(screen(panel), /read/);
+  assert.match(screen(panel), /source.ts/);
+  assert.match(screen(panel), /permission denied/);
+  h.requests[1].finish('Final child answer', 'error', { errorMessage: 'simulated failure' });
+  await until(() => h.notifications.length === 1);
+  assert.match(screen(panel), /Final child answer/);
+  assert.match(screen(panel), /simulated failure/);
+  panel.handleInput('\x1b'); // Child -> list, not cancellation.
+  assert.match(screen(panel), /failed/);
+  panel.handleInput('\r');
+  assert.match(screen(panel), /Final child answer/);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('manual steering uses a multiline child editor and never sends guidance to the parent', async (t) => {
+  const h = harness(t, 'tui');
+  await h.launch([{ prompt: 'Original assignment' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.shortcuts.get('ctrl+shift+a').handler(h.ctx);
+  const panel = h.dialogs[0].component;
+  panel.handleInput('\r');
+  panel.handleInput('\x1b[200~Focus on tests\nand report risks\x1b[201~');
+  panel.handleInput('\r');
+  assert.match(screen(panel), /Steering queued/);
+  assert.match(screen(panel), /1 steering queued/);
+  assert.equal(h.notifications.length, 0);
+  h.requests[0].finish('first response');
+  await until(() => h.requests.length === 2);
+  assert.deepEqual(userTexts(h.requests[1]), ['Original assignment', 'Focus on tests\nand report risks']);
+  assert.doesNotMatch(screen(panel), /1 steering queued/);
+  h.requests[1].finish('steered response');
+  await until(() => h.notifications.length === 1);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('manual stop requires confirmation, aborts only the selected child, and notifies once', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids } } = await h.launch([{ prompt: 'first child' }, { prompt: 'second child' }]);
+  await until(() => h.requests.length === 2);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  panel.handleInput('\x1b[B'); // Down selects the second child.
+  panel.handleInput('x');
+  assert.match(screen(panel), /Stop /);
+  assert.match(screen(panel), /y stop/);
+  panel.handleInput('n');
+  assert.equal(h.requests[1].options.signal.aborted, false);
+  panel.handleInput('x');
+  panel.handleInput('y');
+  assert.equal(h.requests[0].options.signal.aborted, false);
+  assert.equal(h.requests[1].options.signal.aborted, true);
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.id, ids[1]);
+  assert.equal(h.notifications[0].message.details.status, 'stopped');
+  assert.match(h.notifications[0].message.content, /Stopped by user/);
+  await assert.rejects(h.steer(ids[1], 'cannot restart'), /not running/);
+  panel.handleInput('\r');
+  assert.match(screen(panel), /stopped/);
+  panel.handleInput('\x18'); // Cannot stop a finished child twice.
+  assert.doesNotMatch(screen(panel), /y stop/);
+  h.requests[0].finish('first answer');
+  await until(() => h.notifications.length === 2);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('stopping a running tool cancels its signal and discards queued steering without another turn', async (t) => {
+  const h = harness(t, 'tui');
+  let release;
+  let childSignal;
+  const gate = new Promise((resolve) => { release = resolve; });
+  h.ctx.executeTool = async (_name, _args, options) => {
+    childSignal = options.signal;
+    childSignal.addEventListener('abort', () => release(), { once: true });
+    options.onUpdate?.({ content: [{ type: 'text', text: 'partial tool output' }], details: undefined });
+    await gate;
+    return { result: { content: [{ type: 'text', text: 'tool finished' }], details: undefined }, isError: false };
+  };
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'run a tool' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'toolCall', id: 'slow-tool', name: 'read', arguments: { path: 'slow.ts' } }],
+  });
+  await until(() => childSignal);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  assert.match(screen(panel), /Running read/);
+  assert.match(screen(panel), /partial tool output/);
+  await h.steer(id, 'queued but must not run');
+  panel.handleInput('\x18');
+  panel.handleInput('y');
+  assert.equal(childSignal.aborted, true);
+  assert.match(screen(panel), /stopping/);
+  release();
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.status, 'stopped');
+  assert.equal(h.requests.length, 1);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('scrolling pauses live-follow and Ctrl+End resumes it', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'long transcript' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  streamPartial(h.requests[0], Array.from({ length: 80 }, (_, i) => `line-${i}`).join('\n\n'));
+  await until(() => screen(panel).includes('line-79'));
+  panel.handleInput('\x1b[5~'); // PageUp.
+  assert.match(screen(panel), /Scroll paused/);
+  assert.doesNotMatch(screen(panel), /line-79/);
+  panel.handleInput('\x1b[1;5F'); // Ctrl+End.
+  assert.match(screen(panel), /line-79/);
+  assert.match(screen(panel), /Following live output/);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidation', async (t) => {
+  const h = harness(t, 'tui');
+  await h.launch(Array.from({ length: 7 }, (_, i) => ({ prompt: `Task ${i} 日本語 👨‍👩‍👧‍👦 \x1b[31mcolors\x1b[0m\nmore` })));
+  await until(() => h.requests.length === 7);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  const widget = h.widgets.get('subagents.pi');
+  assert.match(screen(widget), /\+3 more/);
+  for (const width of [1, 8, 24, 80]) {
+    for (const rows of [8, 20, 40]) {
+      h.tui.terminal.rows = rows;
+      for (const component of [widget, panel]) {
+        component.invalidate();
+        const lines = component.render(width);
+        assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}`);
+        if (component === panel) assert.ok(lines.length <= Math.max(4, rows - 4));
+      }
+    }
+  }
+  h.ctx.ui.theme = { fg: (_color, text) => text, bold: (text) => `THEME:${text}` };
+  panel.invalidate();
+  assert.match(screen(panel), /THEME:Subagents/);
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('a broken UI observer cannot fail the child agent or produce repeated observer errors', async (t) => {
+  const h = harness(t, 'tui');
+  await h.launch([{ prompt: 'keep working even if UI fails' }]);
+  await until(() => h.requests.length === 1);
+  const logged = t.mock.method(console, 'error', () => {});
+  t.mock.method(h.tui, 'requestRender', () => { throw new Error('disposed renderer'); });
+  streamPartial(h.requests[0], 'still working');
+  await until(() => logged.mock.callCount() === 1);
+  h.requests[0].finish('successful answer');
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.status, 'completed');
+  assert.match(h.notifications[0].message.content, /successful answer/);
+  assert.equal(logged.mock.callCount(), 1);
+});
+
+test('session cleanup closes dashboards, removes widgets, and suppresses stale child notifications', async (t) => {
+  t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
+  const h = harness(t, 'tui');
+  await h.launch([{ prompt: 'cancel on session switch' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open();
+  await h.events.get('session_tree')();
+  await opened;
+  assert.equal(h.dialogs[0].closed, true);
+  assert.equal(h.widgets.size, 0);
+  assert.equal(h.requests[0].options.signal.aborted, true);
+  assert.equal(h.notifications.length, 0);
+  const renders = h.renders;
+  t.mock.timers.tick(5000);
+  assert.equal(h.renders, renders);
+});
+
+test('history is bounded without evicting running agents, and a viewed child stays selected', async (t) => {
+  const h = harness(t, 'tui');
+  await h.launch([{ prompt: 'older finished child' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('older answer');
+  await until(() => h.notifications.length === 1);
+  const { details: { ids: [runningId] } } = await h.launch([{ prompt: 'keep this child running' }]);
+  await until(() => h.requests.length === 2);
+  const opened = h.open(runningId);
+  const panel = h.dialogs[0].component;
+  for (let i = 0; i < 24; i++) {
+    await h.launch([{ prompt: `finished ${i}` }]);
+    await until(() => h.requests.length === i + 3);
+    h.requests[i + 2].finish(`answer ${i}`);
+    await until(() => h.notifications.length === i + 2);
+  }
+  assert.match(screen(panel), /keep this child running/);
+  panel.handleInput('\x1b');
+  assert.match(screen(panel), /1 running · 20 finished/);
+  panel.handleInput('\x1b');
+  await opened;
+  assert.equal(h.requests[1].options.signal.aborted, false);
+});
+
+test('an open finished transcript stays visible after eviction from bounded history', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 }); // Tie timestamps: retention follows completion order.
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'pinned child' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('Keep this finished answer visible');
+  await until(() => h.notifications.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  for (let i = 0; i < 21; i++) {
+    await h.launch([{ prompt: `new child ${i}` }]);
+    await until(() => h.requests.length === i + 2);
+    h.requests[i + 1].finish('new answer');
+    await until(() => h.notifications.length === i + 2);
+  }
+  assert.match(screen(panel), /Keep this finished answer visible/);
+  panel.handleInput('\x1b');
+  assert.match(screen(panel), /0 running · 20 finished/);
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('stop confirmation never retargets a child that completes while the dialog is open', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'child to stop' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  panel.handleInput('\x18');
+  h.requests[0].finish('finished while confirmation was open');
+  await until(() => h.notifications.length === 1);
+  await h.launch([{ prompt: 'do not stop this new child' }]);
+  await until(() => h.requests.length === 2);
+  panel.handleInput('y');
+  assert.equal(h.requests[1].options.signal.aborted, false);
+  assert.equal(h.notifications.length, 1);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('stop confirmation and steering input remain visible on an eight-row terminal', async (t) => {
+  const h = harness(t, 'tui');
+  h.tui.terminal.rows = 8;
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'short screen child' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  panel.handleInput('x');
+  const confirmation = screen(panel, 48);
+  assert.match(confirmation, new RegExp(`Stop ${id.slice(0, 8)}`));
+  assert.match(confirmation, /y stop.*n \/ Esc cancel/);
+  assert.match(confirmation, /Cannot undo/);
+  assert.equal(h.requests[0].options.signal.aborted, false);
+  panel.handleInput('n');
+  panel.handleInput('\r');
+  panel.handleInput('visible draft');
+  assert.match(screen(panel, 48), /visible draft/);
+  panel.handleInput('\x18');
+  assert.match(screen(panel, 48), /y stop/);
+  panel.handleInput('y');
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.notifications[0].message.details.status, 'stopped');
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('mouse clicks reach scrolled thinking/tool blocks and their toggles survive stream updates', async (t) => {
+  const h = harness(t, 'tui');
+  h.tui.terminal.rows = 50;
+  h.ctx.executeTool = async () => ({ result: { content: [{ type: 'text', text: Array.from({ length: 21 }, (_, i) => `tool-row-${i}`).join('\n') }], details: undefined }, isError: false });
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'earlier context\n'.repeat(50) }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'thinking', thinking: 'Click-revealed reasoning' }, { type: 'toolCall', id: 'click-tool', name: 'read', arguments: { path: 'source.ts' } }],
+  });
+  await until(() => h.requests.length === 2);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  let lines = panel.render(96).map(stripTerminalSequences);
+  const thinking = lines.findIndex((line) => line.includes('Thinking...'));
+  assert.ok(thinking >= 0);
+  assert.equal(mouse(panel, thinking)?.handled, true);
+  assert.match(screen(panel), /Click-revealed reasoning/);
+  assert.doesNotMatch(screen(panel), /tool-row-20/);
+  lines = panel.render(96).map(stripTerminalSequences);
+  const output = lines.findIndex((line) => line.includes('tool-row-0'));
+  assert.ok(output >= 0);
+  assert.equal(mouse(panel, output)?.handled, true);
+  assert.match(screen(panel), /tool-row-20/);
+  streamPartial(h.requests[1], 'New streamed text');
+  await until(() => screen(panel).includes('New streamed text'));
+  assert.match(screen(panel), /tool-row-20/);
+  assert.match(screen(panel), /Click-revealed reasoning/);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('clicked thinking state survives replacement of a live partial snapshot', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'stream thoughts' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  const partial = streamPartial(h.requests[0], 'First text', 'Live reasoning');
+  await until(() => screen(panel).includes('First text'));
+  const thinking = panel.render(96).map(stripTerminalSequences).findIndex((line) => line.includes('Thinking...'));
+  mouse(panel, thinking);
+  assert.match(screen(panel), /Live reasoning/);
+  h.requests[0].stream.push({ type: 'text_delta', contentIndex: 1, delta: ' updated',
+    partial: { ...partial, content: [{ type: 'thinking', thinking: 'Live reasoning' }, { type: 'text', text: 'First text updated' }] } });
+  await until(() => screen(panel).includes('First text updated'));
+  assert.match(screen(panel), /Live reasoning/);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('clicking a clipped multiline editor repositions the cursor in the correct draft row', async (t) => {
+  const h = harness(t, 'tui');
+  h.tui.terminal.rows = 12;
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'steer with mouse' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  const draft = Array.from({ length: 10 }, (_, i) => `draft-row-${i}`).join('\n');
+  panel.handleInput(`\x1b[200~${draft}\x1b[201~`);
+  const row = panel.render(96).map(stripTerminalSequences).findIndex((line) => line.includes('draft-row-9'));
+  assert.ok(row >= 0);
+  const result = mouse(panel, row, 0);
+  assert.equal(result?.focus, true);
+  panel.handleInput('INSERTED ');
+  panel.handleInput('\r');
+  h.requests[0].finish('initial answer');
+  await until(() => h.requests.length === 2);
+  assert.equal(userTexts(h.requests[1])[1], draft.replace('draft-row-9', 'INSERTED draft-row-9'));
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('pending artifact delivery cannot be pruned or leak a notification into a new session', async (t) => {
+  const h = harness(t, 'tui');
+  const originalMkdtemp = fsPromises.mkdtemp;
+  const originalWrite = fsPromises.writeFile;
+  let release;
+  let written;
+  let blocked = false;
+  const directories = [];
+  const gate = new Promise((resolve) => { release = resolve; });
+  const fileWritten = new Promise((resolve) => { written = resolve; });
+  fsPromises.mkdtemp = async (...args) => {
+    blocked = true;
+    await gate;
+    const directory = await originalMkdtemp(...args);
+    directories.push(directory);
+    return directory;
+  };
+  fsPromises.writeFile = async (...args) => { const result = await originalWrite(...args); written(); return result; };
+  syncBuiltinESMExports();
+  try {
+    await h.launch([{ prompt: 'delayed large response' }]);
+    await until(() => h.requests.length === 1);
+    h.requests[0].finish('long output\n'.repeat(3000));
+    await until(() => blocked);
+    for (let i = 0; i < 21; i++) {
+      await h.launch([{ prompt: `newer ${i}` }]);
+      await until(() => h.requests.length === i + 2);
+      h.requests[i + 1].finish('small response');
+      await until(() => h.notifications.length === i + 1);
+    }
+    const cleanup = h.events.get('session_tree')();
+    release();
+    await fileWritten;
+    await setImmediate();
+    await cleanup;
+    assert.equal(h.notifications.length, 21);
+    assert.equal(h.widgets.size, 0);
+  } finally {
+    release();
+    fsPromises.mkdtemp = originalMkdtemp;
+    fsPromises.writeFile = originalWrite;
+    syncBuiltinESMExports();
+    await h.events.get('session_shutdown')();
+    for (const directory of directories) await rm(directory, { recursive: true, force: true });
+  }
+});
+
+for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
+  test(`dashboard integrates with real ${Renderer.name} rendering, input, resize, and focus restoration`, async (t) => {
+    const terminal = {
+      columns: 100, rows: 32, kittyProtocolActive: false,
+      start(input, resize) { this.input = input; this.resize = resize; },
+      stop() {}, write() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {},
+      clearScreen() {}, moveBy() {}, setTitle() {}, setProgress() {}, setProgramStatus() {},
+    };
+    const renderer = new Renderer(terminal);
+    const h = harness(t, 'tui', renderer);
+    t.after(() => renderer.stop());
+    const parent = new Text('Parent session remains running underneath', 0, 0);
+    renderer.addChild(parent);
+    renderer.setFocus(parent);
+    renderer.start();
+    const rendered = () => (renderer instanceof TuiAltScreen ? renderer.getScreenLines()
+      : renderer.captureRenderState().previousLines).map(stripTerminalSequences).join('\n');
+    await h.launch([{ prompt: 'Live child transcript' }]);
+    await until(() => h.requests.length === 1);
+    const opened = h.open();
+    renderer.renderNow(true);
+    assert.match(rendered(), /Subagents/);
+    terminal.input('\r');
+    streamPartial(h.requests[0], 'Child output in the real renderer');
+    await until(() => { renderer.renderNow(); return rendered().includes('Child output in the real renderer'); });
+    terminal.input('Manual guidance');
+    let guidance = 'Manual guidance';
+    if (renderer instanceof TuiAltScreen) {
+      renderer.renderNow();
+      const dialog = h.dialogs[0];
+      const bounds = dialog.handle.getBounds();
+      const row = dialog.component.render(bounds.width).map(stripTerminalSequences).findIndex((line) => line.includes('Manual guidance'));
+      assert.ok(row >= 0);
+      const x = bounds.col + 1;
+      const y = bounds.row + row + 1;
+      terminal.input(`\x1b[<0;${x};${y}M`);
+      terminal.input(`\x1b[<0;${x};${y}m`);
+      terminal.input('Clicked ');
+      guidance = 'Clicked Manual guidance';
+    }
+    terminal.input('\r');
+    assert.equal(h.notifications.length, 0);
+    h.requests[0].finish('first answer');
+    await until(() => h.requests.length === 2);
+    assert.deepEqual(userTexts(h.requests[1]), ['Live child transcript', guidance]);
+    terminal.columns = 48;
+    terminal.rows = 18;
+    terminal.resize();
+    renderer.renderNow(true);
+    assert.ok(rendered().split('\n').every((line) => visibleWidth(line) <= 48));
+    terminal.input('\x1b');
+    terminal.input('\x1b');
+    await opened;
+    assert.equal(renderer.hasOverlay(), false);
+    renderer.renderNow(true);
+    assert.match(rendered(), /Parent session remains running/);
+    assert.equal(h.requests[1].options.signal.aborted, false);
+    h.requests[1].finish('done');
+    await until(() => h.notifications.length === 1);
+  });
+}
