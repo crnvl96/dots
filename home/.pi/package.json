@@ -5,6 +5,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
+    "test:openrouter-web-search": "node --test tests/openrouter-web-search.test.ts",
+    "test:openrouter-web-search:live": "node tests/openrouter-web-search.live.ts",
     "test:perplexity": "node --test tests/perplexity.test.ts",
     "test:subagents": "node --test tests/subagents.test.ts"
   },

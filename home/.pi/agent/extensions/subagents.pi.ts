@@ -33,7 +33,19 @@ const Steer = Type.Object({
   id: Type.String({ minLength: 1 }),
   prompt: Type.String({ minLength: 1, description: 'Guidance delivered after the current assistant turn and its tools finish.' }),
 });
-const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer']);
+const Inspect = Type.Object({
+  id: Type.Optional(Type.String({ minLength: 1, description: 'Exact subagent ID. Omit to list retained jobs; supply an ID to include its result.' })),
+});
+const NullableString = Type.Union([Type.String(), Type.Null()]);
+const Snapshot = Type.Object({
+  id: Type.String(), prompt: Type.String(), model: Type.String(), provider: Type.String(),
+  status: StringEnum(['running', 'stopping', 'completed', 'failed', 'stopped'] as const),
+  activity: Type.String(), pendingSteers: Type.Integer(), elapsedMs: Type.Number(),
+  notification: StringEnum(['pending', 'queued', 'failed'] as const),
+  error: NullableString, notificationError: NullableString,
+  result: NullableString, fullOutputPath: NullableString,
+});
+const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status']);
 const DEFAULT_PROMPT = 'You are a general-purpose subagent. Complete the assigned task and return a clear, concise report to the parent agent. You share its working directory; coordinate file changes carefully.';
 const WIDGET = 'subagents.pi';
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -53,7 +65,7 @@ interface Job {
   startedAt: number;
   finishedAt?: number;
   finishedOrder?: number;
-  settled?: boolean;
+  settled?: boolean; // Report preparation/enqueue finished, not an acknowledgement that the parent read it.
   activity: string;
   revision: number;
   pendingSteers: number;
@@ -63,6 +75,10 @@ interface Job {
   cancelled: boolean; // Session cleanup suppresses notifications; a manual stop does not.
   unsubscribe?: () => void;
   done?: Promise<void>;
+  result?: string; // Bounded report, also available while notification/artifact delivery is pending.
+  fullOutputPath?: string;
+  notification: 'pending' | 'queued' | 'failed';
+  notificationError?: string;
 }
 interface DashboardActions {
   jobs: () => Job[];
@@ -72,6 +88,15 @@ interface DashboardActions {
 }
 
 function active(job: Job) { return job.status === 'running' || job.status === 'stopping'; }
+function snapshot(job: Job, includeResult = false): Static<typeof Snapshot> {
+  return {
+    id: job.id, prompt: job.prompt, model: job.agent.state.model.id, provider: job.agent.state.model.provider,
+    status: job.status, activity: job.activity, pendingSteers: job.pendingSteers,
+    elapsedMs: Math.max(0, (job.finishedAt ?? Date.now()) - job.startedAt),
+    notification: job.notification, error: job.error ?? null, notificationError: job.notificationError ?? null,
+    result: includeResult ? job.result ?? null : null, fullOutputPath: job.fullOutputPath ?? null,
+  };
+}
 function oneLine(text: string) { return stripTerminalSequences(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim(); }
 function elapsed(job: Job) {
   const seconds = Math.max(0, Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000));
@@ -507,7 +532,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     refresh();
   }
   function prune() {
-    // Keep jobs cancellable until notification delivery settles, including async file writes.
+    // Keep jobs cancellable until report preparation/enqueue settles, including async file writes.
     const finished = [...jobs.values()].filter((job) => job.settled).sort((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
     for (const job of finished.slice(HISTORY_LIMIT)) jobs.delete(job.id);
   }
@@ -538,21 +563,30 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     job.activity = job.status === 'stopped' ? 'Stopped by user' : error ?? 'Finished';
     job.revision++;
     refresh();
-    const full = `Subagent ${job.id} ${job.status}.\n\n${job.status === 'stopped' ? 'Stopped by user.\n\n' : error ? `Error: ${error}\n\n` : ''}${response || '(No text response.)'}`;
+    const full = `Subagent ${job.id} ${job.status}.\nTask: ${truncateToWidth(oneLine(job.prompt), 160)}\n\n${job.status === 'stopped' ? 'Stopped by user.\n\n' : error ? `Error: ${error}\n\n` : ''}${response || '(No text response.)'}`;
     const truncated = truncateHead(full);
     let content = truncated.content;
+    // Make the report immediately recoverable, even if artifact I/O or enqueueing fails.
+    job.result = content + (truncated.truncated ? '\n\n[Output truncated; preparing full response file.]' : '');
     let fullOutputPath: string | undefined;
     if (truncated.truncated) {
       try {
         const directory = await mkdtemp(join(tmpdir(), 'pi-subagent-'));
         fullOutputPath = join(directory, 'response.md');
-        await writeFile(fullOutputPath, full, 'utf8');
+        await writeFile(fullOutputPath, full, { encoding: 'utf8', mode: 0o600 });
         content += `\n\n[Output truncated. Full response: ${fullOutputPath}]`;
       } catch { fullOutputPath = undefined; content += '\n\n[Output truncated; could not save the full response.]'; }
     }
     if (job.cancelled) return;
-    pi.sendMessage({ customType: WIDGET, content, display: true, details: { id: job.id, status: job.status, fullOutputPath } },
-      { triggerTurn: true, deliverAs: 'followUp' });
+    job.result = content;
+    job.fullOutputPath = fullOutputPath;
+    // followUp waits for the parent to stop calling tools, starving useful results
+    // during long tasks. steer is drained at a safe boundary after the current tools.
+    pi.sendMessage({ customType: WIDGET, content, display: true,
+      details: { id: job.id, status: job.status, prompt: job.prompt, model: job.agent.state.model.id,
+        provider: job.agent.state.model.provider, fullOutputPath } },
+    { triggerTurn: true, deliverAs: 'steer' });
+    job.notification = 'queued';
   }
   async function cleanup() {
     const pending = [...jobs.values()];
@@ -580,13 +614,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerShortcut('ctrl+shift+a', { description: 'Open live subagent dashboard', handler: (ctx) => dashboard(ctx) });
   pi.registerTool({
     name: 'subagents_launch', label: 'Launch subagents',
-    description: 'Launch general-purpose subagents in parallel in the background. Returns IDs immediately, not answers. Each child has isolated history and shares the parent workspace and callable tools. Completion or failure sends the parent a follow-up with the response. No polling needed.',
+    description: 'Launch general-purpose subagents in parallel in the background. Returns structured IDs and task metadata immediately, not answers. Each child has isolated history and shares the parent workspace and callable tools. Completion or failure delivers a report at the next safe parent turn boundary, or resumes an idle parent. No polling needed.',
     promptGuidelines: [
       'Use subagents_launch for independent work. Give each child all necessary context in its prompt; it does not inherit conversation history.',
-      'Subagents run in the background. Continue useful work or end your turn; their completion messages automatically resume you.',
-      'Coordinate shared-file edits to avoid conflicts. Use subagents_steer to redirect a running child.',
+      'Subagents run in the background. Continue useful work or end your turn; completion reports arrive at the next safe turn boundary and automatically resume an idle parent.',
+      'Coordinate shared-file edits to avoid conflicts. Use subagents_steer to redirect a running child. If it has finished, steering returns its result without restarting it.',
+      'Use subagents_status to inspect progress or recover a retained result when needed, not in a polling loop. Do not declare delegated work complete until you have checked its result.',
     ],
     parameters: Launch,
+    outputSchema: Type.Object({ ids: Type.Array(Type.String()), agents: Type.Array(Snapshot) }),
     async execute(_callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       if (!params.tasks.length) throw new Error('At least one subagent task is required.');
@@ -595,13 +631,15 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       const prepared: Job[] = params.tasks.map((task) => ({
         id: randomUUID(), agent: prepare(task, ctx, ctx.thinkingLevel ?? pi.getThinkingLevel(), defaultTools),
         prompt: task.prompt, cwd: ctx.cwd, cancelled: false, status: 'running', startedAt: Date.now(),
-        activity: 'Starting', revision: 0, pendingSteers: 0, tools: new Map(),
+        activity: 'Starting', revision: 0, pendingSteers: 0, tools: new Map(), notification: 'pending',
       }));
       attachUI(ctx);
       for (const job of prepared) {
         jobs.set(job.id, job);
         job.unsubscribe = job.agent.subscribe((event) => progress(job, event));
         job.done = run(job).catch((error) => {
+          job.notification = 'failed';
+          job.notificationError = error instanceof Error ? error.message : String(error);
           console.error(`subagents.pi: could not deliver ${job.id}:`, error);
         }).finally(() => { job.settled = true; job.unsubscribe?.(); prune(); refresh(); });
       }
@@ -610,20 +648,49 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       return {
         content: [{ type: 'text', text: `Launched background subagents: ${ids.join(', ')}. Responses will arrive automatically.` }],
         details: { ids },
+        structuredContent: { ids, agents: prepared.map((job) => snapshot(job)) },
       };
     },
   });
   pi.registerTool({
     name: 'subagents_steer', label: 'Steer subagent',
-    description: 'Send guidance to a running background subagent. It is queued after the current assistant turn and its tool calls; it does not interrupt a tool mid-call.',
+    description: 'Send guidance to a running background subagent after its current turn and tools finish. If it has already finished or is stopping, returns accepted:false with its current status and available result; never restarts it.',
     parameters: Steer,
+    outputSchema: Type.Object({ accepted: Type.Boolean(), agent: Snapshot }),
     async execute(_callId, params, signal) {
       signal?.throwIfAborted();
       const job = jobs.get(params.id);
       if (!params.prompt.trim()) throw new Error('Steering prompt must not be blank.');
-      if (!job) throw new Error(`Subagent is not running: ${params.id}`);
-      steer(job, params.prompt);
-      return { content: [{ type: 'text', text: `Steering queued for subagent ${job.id}.` }], details: { id: job.id } };
+      if (!job) throw new Error(`Subagent is not running or no longer retained: ${params.id}. Use subagents_status to list current jobs.`);
+      const accepted = job.status === 'running';
+      if (accepted) steer(job, params.prompt);
+      const agent = snapshot(job, !accepted);
+      return {
+        content: [{ type: 'text', text: accepted ? `Steering queued for subagent ${job.id}.`
+          : `Subagent ${job.id} is ${job.status}; guidance was not queued and the child was not restarted.\n\n${job.result ?? 'The final report is not ready yet.'}` }],
+        details: { id: job.id, accepted, status: job.status },
+        structuredContent: { accepted, agent },
+      };
+    },
+  });
+  pi.registerTool({
+    name: 'subagents_status', label: 'Subagent status',
+    description: 'Inspect background subagent progress without waiting or making model calls. Omit id to list retained jobs; supply an exact ID to recover its available result. Reports are delivered automatically; use this for diagnostics, not polling. History is limited to this runtime and the latest 20 finished jobs.',
+    parameters: Inspect,
+    outputSchema: Type.Object({ agents: Type.Array(Snapshot) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    async execute(_callId, params, signal) {
+      signal?.throwIfAborted();
+      const job = params.id ? jobs.get(params.id) : undefined;
+      if (params.id && !job) throw new Error(`Unknown or no longer retained subagent: ${params.id}`);
+      const agents = (job ? [job] : [...jobs.values()]).map((item) => snapshot(item, Boolean(job)));
+      return {
+        content: [{ type: 'text', text: agents.length ? agents.map((item) =>
+          `${item.id} · ${item.status} · ${item.activity}\nTask: ${truncateToWidth(oneLine(item.prompt), 160)}`
+          + (job ? `\nNotification: ${item.notification}${item.notificationError ? ` (${item.notificationError})` : ''}\n\n${item.result ?? '(No final report yet.)'}` : '')).join('\n\n')
+          : 'No retained subagents in this session.' }],
+        details: { agents }, structuredContent: { agents },
+      };
     },
   });
 }

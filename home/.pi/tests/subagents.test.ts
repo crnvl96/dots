@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { setImmediate } from 'node:timers/promises';
 import test from 'node:test';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
+import { Agent } from '@earendil-works/pi-agent-core';
 import { DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
 import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
 import extension from '../agent/extensions/subagents.pi.ts';
@@ -71,14 +72,14 @@ function harness(t, mode = 'print', renderer) {
   const notifications = [];
   const requests = [];
   const nested = [];
-  const active = ['read', 'subagents_launch', 'subagents_steer'];
+  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_status'];
   const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
   const ctx = {
     mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
     cwd: process.cwd(),
     model: parentModel,
     thinkingLevel: 'medium',
-    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer'].map((name) => ({
+    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_status'].map((name) => ({
       name, label: name, description: name, parameters: schema,
       execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
     })),
@@ -155,14 +156,15 @@ test('loads through Pi’s real extension loader', async (t) => {
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer']);
+  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_status']);
   assert.ok(result.extensions[0].commands.has('subagents'));
   assert.ok(result.extensions[0].shortcuts.has('ctrl+shift+a'));
 });
 
-test('registers only launch and steer tools', (t) => {
+test('registers launch, steer and status tools with structured output contracts', (t) => {
   const h = harness(t);
-  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer']);
+  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_status']);
+  for (const tool of h.tools.values()) assert.equal(tool.outputSchema.type, 'object');
 });
 
 test('launch returns IDs without waiting; children run in parallel and notify out of order exactly once', async (t) => {
@@ -178,7 +180,7 @@ test('launch returns IDs without waiting; children run in parallel and notify ou
   await until(() => h.notifications.length === 1);
   assert.equal(h.notifications[0].message.details.id, secondId);
   assert.match(h.notifications[0].message.content, /second answer/);
-  assert.deepEqual(h.notifications[0].options, { triggerTurn: true, deliverAs: 'followUp' });
+  assert.deepEqual(h.notifications[0].options, { triggerTurn: true, deliverAs: 'steer' });
   assert.equal(h.notifications[0].message.display, true);
   assert.equal(h.notifications[0].message.customType, 'subagents.pi');
 
@@ -186,7 +188,10 @@ test('launch returns IDs without waiting; children run in parallel and notify ou
   await until(() => h.notifications.length === 2);
   assert.equal(h.notifications[1].message.details.id, firstId);
   assert.match(h.notifications[1].message.content, /first answer/);
-  await assert.rejects(h.steer(firstId, 'too late'), /not running/);
+  const late = await h.steer(firstId, 'too late');
+  assert.equal(late.structuredContent.accepted, false);
+  assert.equal(late.structuredContent.agent.status, 'completed');
+  assert.match(late.structuredContent.agent.result, /first answer/);
   assert.equal(h.notifications.length, 2);
 });
 
@@ -315,6 +320,7 @@ test('validates the entire batch before starting any child', async (t) => {
     { prompt: 'bad tool', tools: ['does-not-exist'] },
     { prompt: 'no recursion', tools: ['subagents_launch'] },
     { prompt: 'no orchestration', tools: ['subagents_steer'] },
+    { prompt: 'no sibling inspection', tools: ['subagents_status'] },
     { prompt: '   ' },
   ]) {
     await assert.rejects(h.launch([{ prompt: 'valid' }, invalid]));
@@ -351,7 +357,11 @@ for (const stopReason of ['error', 'aborted']) {
     assert.equal(h.requests.length, 1);
     assert.equal(h.notifications[0].message.details.status, 'failed');
     assert.match(h.notifications[0].message.content, /hard exit/);
-    await assert.rejects(h.steer(id, 'too late'), /not running/);
+    const late = await h.steer(id, 'too late');
+    assert.equal(late.structuredContent.accepted, false);
+    assert.equal(late.structuredContent.agent.status, 'failed');
+    assert.match(late.structuredContent.agent.result, /hard exit/);
+    assert.equal(h.requests.length, 1);
   });
 }
 
@@ -390,6 +400,11 @@ test('large responses are truncated with the complete answer saved to a file', a
   assert.ok(content.length < answer.length);
   const full = await readFile(details.fullOutputPath, 'utf8');
   assert.ok(full.endsWith(answer));
+  assert.equal((await fsPromises.stat(details.fullOutputPath)).mode & 0o777, 0o600);
+  const retained = (await h.call('subagents_status', { id: details.id })).structuredContent.agents[0];
+  assert.equal(retained.fullOutputPath, details.fullOutputPath);
+  assert.match(retained.result, /Output truncated/);
+  assert.ok(retained.result.length < full.length);
 });
 
 function screen(component, width = 96) {
@@ -531,7 +546,9 @@ test('manual stop requires confirmation, aborts only the selected child, and not
   assert.equal(h.notifications[0].message.details.id, ids[1]);
   assert.equal(h.notifications[0].message.details.status, 'stopped');
   assert.match(h.notifications[0].message.content, /Stopped by user/);
-  await assert.rejects(h.steer(ids[1], 'cannot restart'), /not running/);
+  const late = await h.steer(ids[1], 'cannot restart');
+  assert.equal(late.structuredContent.accepted, false);
+  assert.equal(late.structuredContent.agent.status, 'stopped');
   panel.handleInput('\r');
   assert.match(screen(panel), /stopped/);
   panel.handleInput('\x18'); // Cannot stop a finished child twice.
@@ -570,6 +587,9 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   panel.handleInput('y');
   assert.equal(childSignal.aborted, true);
   assert.match(screen(panel), /stopping/);
+  const late = await h.steer(id, 'do not revive this child');
+  assert.equal(late.structuredContent.accepted, false);
+  assert.equal(late.structuredContent.agent.status, 'stopping');
   release();
   await until(() => h.notifications.length === 1);
   assert.equal(h.notifications[0].message.details.status, 'stopped');
@@ -678,6 +698,10 @@ test('history is bounded without evicting running agents, and a viewed child sta
   panel.handleInput('\x1b');
   await opened;
   assert.equal(h.requests[1].options.signal.aborted, false);
+  const retained = (await h.call('subagents_status', {})).structuredContent.agents;
+  assert.equal(retained.length, 21);
+  assert.equal(retained.find((job) => job.id === runningId).status, 'running');
+  assert.ok(!retained.some((job) => job.prompt === 'older finished child'));
 });
 
 test('an open finished transcript stays visible after eviction from bounded history', async (t) => {
@@ -847,6 +871,12 @@ test('pending artifact delivery cannot be pruned or leak a notification into a n
     await until(() => h.requests.length === 1);
     h.requests[0].finish('long output\n'.repeat(3000));
     await until(() => blocked);
+    const pending = (await h.call('subagents_status', {})).structuredContent.agents[0];
+    assert.equal(pending.status, 'completed');
+    assert.equal(pending.notification, 'pending');
+    const late = await h.steer(pending.id, 'too late even while output is being saved');
+    assert.equal(late.structuredContent.accepted, false);
+    assert.match(late.structuredContent.agent.result, /preparing full response file/);
     for (let i = 0; i < 21; i++) {
       await h.launch([{ prompt: `newer ${i}` }]);
       await until(() => h.requests.length === i + 2);
@@ -868,6 +898,146 @@ test('pending artifact delivery cannot be pruned or leak a notification into a n
     await h.events.get('session_shutdown')();
     for (const directory of directories) await rm(directory, { recursive: true, force: true });
   }
+});
+
+test('launch returns machine-readable IDs mapped to task prompts and selected models', async (t) => {
+  const h = harness(t);
+  const output = await h.launch([{ prompt: 'research' }, { prompt: 'tests', model: childModel.id, provider: childModel.provider }]);
+  assert.deepEqual(output.structuredContent.ids, output.details.ids);
+  const agents = output.structuredContent.agents;
+  assert.deepEqual(agents.map((a) => [a.id, a.prompt, a.model, a.provider, a.status]), [
+    [output.details.ids[0], 'research', parentModel.id, parentModel.provider, 'running'],
+    [output.details.ids[1], 'tests', childModel.id, childModel.provider, 'running'],
+  ]);
+  assert.ok(agents.every((a) => a.result === null && a.notification === 'pending'));
+  await until(() => h.requests.length === 2);
+  h.requests.forEach((request) => request.finish('done'));
+  await until(() => h.notifications.length === 2);
+});
+
+test('status is nonblocking, tracks queued guidance, and only includes a report for an explicit ID', async (t) => {
+  const h = harness(t);
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent, { agents: [] });
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'inspect state' }]);
+  await until(() => h.requests.length === 1);
+  const steered = await h.steer(id, 'additional guidance');
+  assert.equal(steered.structuredContent.accepted, true);
+  assert.equal(steered.structuredContent.agent.pendingSteers, 1);
+  const running = (await h.call('subagents_status', { id })).structuredContent.agents[0];
+  assert.equal(running.status, 'running');
+  assert.equal(running.pendingSteers, 1);
+  assert.equal(running.result, null);
+  assert.equal(h.requests.length, 1); // Inspection makes no provider call and never waits for completion.
+  h.requests[0].finish('initial answer');
+  await until(() => h.requests.length === 2);
+  assert.equal((await h.call('subagents_status', { id })).structuredContent.agents[0].pendingSteers, 0);
+  h.requests[1].finish('final retrieved report');
+  await until(() => h.notifications.length === 1);
+  const list = (await h.call('subagents_status', {})).structuredContent.agents;
+  assert.equal(list[0].result, null);
+  const completed = (await h.call('subagents_status', { id })).structuredContent.agents[0];
+  assert.equal(completed.status, 'completed');
+  assert.equal(completed.notification, 'queued');
+  assert.match(completed.result, /Task: inspect state/);
+  assert.match(completed.result, /final retrieved report/);
+  assert.equal(h.notifications[0].message.details.prompt, 'inspect state');
+  const late = await h.steer(id, 'late guidance');
+  assert.equal(late.structuredContent.accepted, false);
+  assert.match(late.content[0].text, /was not restarted/);
+  assert.equal(late.structuredContent.agent.result, completed.result);
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.requests.length, 2);
+});
+
+test('status rejects missing/stale IDs and cancellation and clears at session boundaries', async (t) => {
+  const h = harness(t);
+  await assert.rejects(h.call('subagents_status', { id: 'unknown' }), /Unknown or no longer retained/);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'old session' }]);
+  await until(() => h.requests.length === 1);
+  await assert.rejects(h.call('subagents_status', { id }, AbortSignal.abort()), /abort/i);
+  await h.events.get('session_tree')();
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  await assert.rejects(h.call('subagents_status', { id }), /Unknown or no longer retained/);
+});
+
+test('a failed notification enqueue retains the completed report for status and late steering', async (t) => {
+  const h = harness(t);
+  const logged = t.mock.method(console, 'error', () => {});
+  h.pi.sendMessage = () => { throw new Error('synthetic enqueue failure'); };
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'recover report' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('important child findings');
+  await until(() => logged.mock.callCount() === 1);
+  const job = (await h.call('subagents_status', { id })).structuredContent.agents[0];
+  assert.equal(job.status, 'completed');
+  assert.equal(job.notification, 'failed');
+  assert.equal(job.notificationError, 'synthetic enqueue failure');
+  assert.match(job.result, /important child findings/);
+  assert.match((await h.steer(id, 'late guidance')).structuredContent.agent.result, /important child findings/);
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.notifications.length, 0);
+});
+
+test('completion reaches a real busy parent Agent on its next turn, after all sibling tools finish', async (t) => {
+  const h = harness(t);
+  let release;
+  let releaseSibling;
+  let parentToolStarted = false;
+  let siblingStarted = false;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const siblingGate = new Promise((resolve) => { releaseSibling = resolve; });
+  const parent = new Agent({
+    initialState: {
+      model: parentModel, systemPrompt: 'Parent test',
+      tools: [{ name: 'slow_read', label: 'Read', description: 'Controlled tool', parameters: {
+        type: 'object', properties: { sibling: { type: 'boolean' } }, required: ['sibling'],
+      },
+        async execute(_id, args) {
+          if (args.sibling) { siblingStarted = true; await siblingGate; }
+          else { parentToolStarted = true; await gate; }
+          return { content: [{ type: 'text', text: 'parent tool finished' }], details: undefined };
+        } }],
+    },
+    streamFn: (model, context, options) => h.ctx.modelRegistry.streamSimple(model, context, options),
+    // Match Pi custom-message conversion without booting another UI/session.
+    convertToLlm: (messages) => messages.map((message) => message.role === 'custom'
+      ? { role: 'user', content: message.content, timestamp: message.timestamp } : message),
+  });
+  t.after(async () => { release(); releaseSibling(); parent.abort(); await parent.waitForIdle(); });
+  const running = parent.prompt('Keep doing useful work');
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('', 'toolUse', { content: [
+    { type: 'toolCall', id: 'slow', name: 'slow_read', arguments: { sibling: false } },
+    { type: 'toolCall', id: 'sibling', name: 'slow_read', arguments: { sibling: true } },
+  ] });
+  await until(() => parentToolStarted);
+  h.pi.sendMessage = (message, options) => {
+    h.notifications.push({ message, options });
+    const custom = { ...message, role: 'custom', timestamp: Date.now() };
+    // This is the same busy-session routing as AgentSession.sendCustomMessage.
+    if (options.deliverAs === 'followUp') parent.followUp(custom);
+    else parent.steer(custom);
+  };
+  await h.launch([{ prompt: 'Return findings while parent is busy' }]);
+  await until(() => h.requests.length === 2);
+  h.requests[1].finish('USE THESE FINDINGS BEFORE FINALIZING');
+  await until(() => h.notifications.length === 1);
+  assert.equal(h.requests.length, 2); // No interruption of the parent's running tool.
+  release();
+  await until(() => siblingStarted);
+  await setImmediate();
+  assert.equal(h.requests.length, 2); // First tool finished, but its sibling is still running.
+  releaseSibling();
+  await until(() => h.requests.length === 3);
+  const next = h.requests[2].context.messages;
+  assert.equal(next.filter((m) => m.role === 'toolResult').length, 2);
+  const toolIndex = next.findLastIndex((m) => m.role === 'toolResult');
+  const completionIndex = next.findIndex((m) => m.role === 'user' && String(m.content).includes('USE THESE FINDINGS'));
+  assert.ok(toolIndex >= 0 && completionIndex > toolIndex, 'completion must arrive after tool results, before the next parent request');
+  h.requests[2].finish('Parent incorporated child findings');
+  await running;
+  assert.equal(h.requests.length, 3); // No redundant post-final follow-up request.
+  assert.equal(h.notifications.length, 1);
 });
 
 for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
