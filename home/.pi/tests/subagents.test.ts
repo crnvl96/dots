@@ -961,7 +961,7 @@ test('child counters use actual tool calls and finalized tokens, and finished UI
   partial.usage.totalTokens = 999999;
   assert.doesNotMatch(screen(panel), /tokens/); // No estimates from in-flight snapshots.
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'counter-read', name: 'read', arguments: { path: 'usage.ts' } }],
+    content: [{ type: 'toolCall', id: 'counter-read', name: 'read', arguments: { path: 'example.ts' } }],
     usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 1200,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   });
