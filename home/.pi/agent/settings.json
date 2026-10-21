@@ -1,33 +1,6 @@
 {
-  "lastChangelogVersion": "1.3.0",
-  "theme": "system",
-  "editorPaddingX": 1,
+  "$schema": "https://pi.dev/schemas/settings.schema.json",
   "defaultProvider": "radius",
-  "defaultModel": "glm-5.3-flash",
-  "defaultThinkingLevel": "high",
-  "hideThinkingBlock": true,
-  "collapseChangelog": true,
-  "tuiMode": "fullscreen",
-  "doubleEscapeAction": "tree",
-  "showCacheMissNotices": true,
-  "treeFilterMode": "no-tools",
-  "defaultProjectTrust": "always",
-  "defaultTools": [
-    "+codemode"
-  ],
-  "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
-  "packages": [],
-  "extensions": [
-    "-extensions/perplexity.ts",
-    "-extensions/openrouter-web-search.ts"
-  ],
-  "subagents": {
-    "disableBuiltins": true
-  },
-  "enabledModels": [
-    "openai/gpt-5.6-luna",
-    "openai/gpt-6-astra",
-    "openai/gpt-6.1-sol",
-    "xai/grok-4.7"
-  ]
+  "defaultModel": "recursive/flint",
+  "lastChangelogVersion": "1.3.0"
 }
