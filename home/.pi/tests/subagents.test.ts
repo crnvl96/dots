@@ -685,6 +685,72 @@ test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidat
   await opened;
 });
 
+test('Claude-inspired list prioritizes tasks, aligns state, and uses quiet indented details', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids } } = await h.launch([{ prompt: 'Review the parser ' + 'with a very long assignment '.repeat(8) }, { prompt: 'Write regression tests' }]);
+  await until(() => h.requests.length === 2);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  const backgrounds = [];
+  h.ctx.ui.theme.bg = (color, text) => { backgrounds.push(color); return text; };
+  const lines = panel.render(96).map(stripTerminalSequences);
+  assert.match(lines[0], /Subagents.*2 running/);
+  assert.match(lines[1], /Background tasks/);
+  const selected = lines.findIndex(line => line.includes('›'));
+  assert.match(lines[selected], /› .*Review the parser.*running · 0:00$/);
+  assert.match(lines[selected + 1], /⎿.*parent-model.*0 tool uses/);
+  assert.equal(visibleWidth(lines[selected]), 96);
+  assert.doesNotMatch(lines.join('\n'), /[╭╮╰╯]|\[.*running\]/);
+  for (const id of ids) assert.ok(!lines.join('\n').includes(id.slice(0, 8)));
+  assert.deepEqual(backgrounds, []); // No full-width cards or selection bands.
+  const widget = screen(h.widgets.get('subagents.pi'));
+  assert.match(widget, /⎿.*Review the parser/);
+  assert.match(widget, /Ctrl\+Shift\+A to manage/);
+  for (const id of ids) assert.ok(!widget.includes(id.slice(0, 8)));
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('child counters use actual tool calls and finalized tokens, and finished UI removes steering hints', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect usage counters' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  const partial = streamPartial(h.requests[0], 'Working');
+  partial.usage.totalTokens = 999999;
+  assert.doesNotMatch(screen(panel), /tokens/); // No estimates from in-flight snapshots.
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'toolCall', id: 'counter-read', name: 'read', arguments: { path: 'usage.ts' } }],
+    usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 1200,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+  });
+  await until(() => h.requests.length === 2);
+  assert.match(screen(panel), /1 tool use · 1\.2K tokens/);
+  h.requests[1].finish('Finished');
+  await until(() => h.notifications.length === 1);
+  panel.handleInput('\r');
+  const transcript = screen(panel);
+  assert.match(transcript, /Subagents \/ Inspect usage counters/);
+  assert.match(transcript, new RegExp(id.slice(0, 8)));
+  assert.match(transcript, /End of transcript/);
+  assert.doesNotMatch(transcript, /Enter.*steer|Ctrl\+X.*stop|Following live output/);
+  panel.handleInput('\x1b');
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('compact widget distinguishes failed work from successful completion', async (t) => {
+  const h = harness(t, 'tui');
+  await h.launch([{ prompt: 'Fail safely' }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('', 'error', { errorMessage: 'test failure' });
+  await until(() => h.notifications.length === 1);
+  const widget = screen(h.widgets.get('subagents.pi'));
+  assert.match(widget, /✗ Subagents · 0 running · 1 finished · 1 failed/);
+  assert.doesNotMatch(widget, /✓/);
+});
+
 test('a broken UI observer cannot fail the child agent or produce repeated observer errors', async (t) => {
   const h = harness(t, 'tui');
   await h.launch([{ prompt: 'keep working even if UI fails' }]);

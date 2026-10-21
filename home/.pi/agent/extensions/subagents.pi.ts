@@ -10,7 +10,7 @@ import {
   type KeybindingsManager, type Theme,
 } from '@earendil-works/pi-coding-agent';
 import {
-  Container, Editor, ScrollView, matchesKey, stripTerminalSequences, truncateToWidth,
+  Container, Editor, ScrollView, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth,
   type Component, type Focusable, type TUI, type TuiMouseEvent,
 } from '@earendil-works/pi-tui';
 import { Type, type Static } from 'typebox';
@@ -52,8 +52,9 @@ const Snapshot = Type.Object({
 const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status', 'subagents_wait']);
 const DEFAULT_PROMPT = 'You are a general-purpose subagent. Complete the assigned task and return a clear, concise report to the parent agent. You share its working directory; coordinate file changes carefully.';
 const WIDGET = 'subagents.pi';
-const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
 const HISTORY_LIMIT = 20;
+const TOKEN_FORMAT = new Intl.NumberFormat('en-US', { notation: 'compact', maximumFractionDigits: 1 });
 type TaskInput = Static<typeof Task>;
 type Status = 'running' | 'stopping' | 'completed' | 'failed' | 'stopped';
 type ToolProgress = {
@@ -106,15 +107,39 @@ function elapsed(job: Job) {
   const seconds = Math.max(0, Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
-function badge(job: Job, theme: Theme, compact = false) {
-  const color = job.status === 'running' ? 'accent' : job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning';
+function statusColor(job: Job): Parameters<Theme['fg']>[0] {
+  return job.status === 'running' ? 'accent' : job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning';
+}
+function badge(job: Job, theme: Theme) {
   const icon = active(job) ? FRAMES[Math.floor(Date.now() / 100) % FRAMES.length]
     : job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '■';
-  return theme.fg(color, compact ? icon : `[${icon} ${job.status}]`);
+  return theme.fg(statusColor(job), icon);
 }
-function jobLine(job: Job, theme: Theme, width: number) {
-  const divider = width < 32 ? ' ' : ` ${theme.fg('borderMuted', '│')} `;
-  return `${badge(job, theme, width < 60)} ${theme.fg('accent', job.id.slice(0, 8))} ${theme.fg('muted', elapsed(job))}${divider}${theme.fg('text', oneLine(job.prompt))}`;
+// Keep status visible even when a task name is long; measure columns, not ANSI bytes.
+function columns(left: string, right: string, width: number) {
+  width = Math.max(0, width);
+  const room = width - visibleWidth(right) - 2;
+  if (room < 12) return truncateToWidth(left, width);
+  const clipped = truncateToWidth(left, room);
+  return clipped + ' '.repeat(width - visibleWidth(clipped) - visibleWidth(right)) + right;
+}
+function jobLine(job: Job, theme: Theme, width: number, selected = false) {
+  const prompt = oneLine(job.prompt);
+  const title = theme.fg(selected ? 'accent' : 'text', selected ? theme.bold(prompt) : prompt);
+  return columns(`${badge(job, theme)} ${title}`, theme.fg(statusColor(job), job.status) + theme.fg('dim', ` · ${elapsed(job)}`), width);
+}
+function jobStats(job: Job) {
+  // Provider-reported finalized usage only; partial snapshots are not additive.
+  const tokens = job.agent.state.messages.reduce((total, message) => message.role === 'assistant'
+    ? total + (Number.isFinite(message.usage.totalTokens) ? Math.max(0, message.usage.totalTokens) : 0) : total, 0);
+  const count = job.tools.size;
+  return `${count} tool ${count === 1 ? 'use' : 'uses'}${tokens ? ` · ${TOKEN_FORMAT.format(tokens)} tokens` : ''}`;
+}
+function jobDetail(job: Job, theme: Theme, width: number) {
+  const activity = `${width < 60 ? `${job.status} · ` : ''}${oneLine(job.activity)}`;
+  const queued = job.pendingSteers ? theme.fg('warning', ` · ${job.pendingSteers} steering queued`) : '';
+  return columns(theme.fg('muted', activity) + queued,
+    theme.fg('dim', `${oneLine(job.agent.state.model.id)} · ${jobStats(job)}`), width);
 }
 function panelLine(text: string, width: number, theme: Theme, background: Parameters<Theme['bg']>[0]) {
   // Truncation inserts full resets around its ellipsis. Reapply the surface after
@@ -369,10 +394,9 @@ class SubagentDashboard implements Component, Focusable {
     this.selected = Math.min(this.selected, Math.max(0, jobs.length - 1));
     const job = this.job;
     const height = Math.max(4, this.tui.terminal.rows - 4);
-    // Decorate the existing chrome without insetting native content: transcript/editor
-    // columns and the two-line list rows must retain their mouse coordinates.
-    const rule = (top: boolean) => theme.fg('border', width < 2 ? '─'.repeat(Math.max(0, width))
-      : `${top ? '╭' : '╰'}${'─'.repeat(width - 2)}${top ? '╮' : '╯'}`);
+    // Flat task-list chrome inspired by Claude Code. Keep native content at column
+    // zero and retain two-line rows so transcript/editor mouse coordinates stay exact.
+    const rule = () => theme.fg('borderMuted', '─'.repeat(Math.max(0, width)));
     const key = (text: string) => theme.fg('accent', text);
     const separator = theme.fg('borderMuted', ' · ');
     this.editorBounds = undefined;
@@ -389,13 +413,13 @@ class SubagentDashboard implements Component, Focusable {
     }
     const compact = height < 8;
     const running = jobs.filter(active).length;
-    const title = this.viewing && job ? ` ${jobLine(job, theme, width - 1)}`
+    const title = this.viewing && job ? columns(` ${theme.fg('dim', 'Subagents /')} ${theme.bold(oneLine(job.prompt))}`,
+      `${badge(job, theme)} ${theme.fg(statusColor(job), job.status)}${theme.fg('dim', ` · ${elapsed(job)}`)}`, width)
       : ` ${theme.fg('accent', theme.bold('Subagents'))}  ${theme.fg(running ? 'accent' : 'muted', `${running} running`)}${separator}${theme.fg('muted', `${jobs.length - running} finished`)}`;
     const subtitle = this.viewing && job
-      ? ` ${width - 1 < 60 ? `${job.status} · ` : ''}${oneLine(job.agent.state.model.provider)}/${oneLine(job.agent.state.model.id)} · ${job.agent.state.thinkingLevel} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''}`
-      : ` ${key('↑↓')} select · ${key('Enter')} view / steer · ${key('x')} stop · ${key('Esc')} parent`;
-    const heading = panelLine(title, width, theme, 'customMessageBg');
-    const lines = compact ? [heading] : [rule(true), heading, theme.fg('muted', subtitle)];
+      ? ` ${width < 60 ? `${job.status} · ` : ''}${oneLine(job.agent.state.model.provider)}/${oneLine(job.agent.state.model.id)} · ${jobStats(job)} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''} · ${job.id.slice(0, 8)}`
+      : ' Background tasks · select an agent to view its output or send guidance';
+    const lines = compact ? [title] : [title, theme.fg('dim', subtitle), rule()];
     this.bodyTop = lines.length;
     let editor: string[] = [];
     let editorOffset = 0;
@@ -412,11 +436,12 @@ class SubagentDashboard implements Component, Focusable {
         editor = editor.slice(editorOffset, editorOffset + maxEditor);
       }
     }
+    const controls = job?.status === 'running' ? `${key('Enter')} steer · ${key('Ctrl+X')} stop · ` : '';
     const footer = theme.fg('muted', compact
-      ? this.viewing ? ` ${key('Enter')} steer · ${key('Ctrl+X')} stop · ${key('Esc')} list`
+      ? this.viewing ? ` ${controls}${key('Esc')} list`
         : ` ${key('Enter')} view · ${key('x')} stop · ${key('Esc')} parent`
-      : this.viewing ? ` ${key('Enter')} steer · ${key('Ctrl+X')} stop · ${key('PgUp/PgDn')} scroll · ${key('Ctrl+O')} tools · ${key('Ctrl+T')} thinking · ${key('Esc')} list`
-        : ` ${key('Ctrl+Shift+A')} / ${key('/subagents')} · history kept for this session (latest 20 finished)`);
+      : this.viewing ? ` ${controls}${key('PgUp/PgDn')} scroll · ${key('Ctrl+O')} tools · ${key('Ctrl+T')} thinking · ${key('Esc')} list`
+        : ` ${key('↑↓')} select · ${key('Enter')} view · ${key('s')} steer · ${key('x')} stop · ${key('Esc')} parent`);
     this.bodyHeight = Math.max(0, height - lines.length - editor.length - (compact ? 1 : 3));
     if (this.viewing && job) {
       this.syncTranscript(job);
@@ -432,20 +457,20 @@ class SubagentDashboard implements Component, Focusable {
       if (this.selected >= this.contentTop + capacity) this.contentTop = this.selected - capacity + 1;
       for (const [offset, item] of jobs.slice(this.contentTop, this.contentTop + capacity).entries()) {
         const selected = offset + this.contentTop === this.selected;
-        const row = `${selected ? theme.fg('accent', theme.bold(' ›')) : '  '} ${jobLine(item, theme, width - 3)}`;
-        const detail = `     ${theme.fg('muted', `${width - 3 < 60 ? `${item.status} · ` : ''}${oneLine(item.activity)}`)}${item.pendingSteers ? separator + theme.fg('warning', `${item.pendingSteers} steering queued`) : ''}`;
-        // Paint both rows, including their trailing cells, as one selection band.
-        lines.push(selected ? panelLine(row, width, theme, 'selectedBg') : row);
-        lines.push(selected ? panelLine(detail, width, theme, 'selectedBg') : detail);
+        const row = `${selected ? theme.fg('accent', theme.bold(' ›')) : '  '} ${jobLine(item, theme, width - 3, selected)}`;
+        const detail = `   ${theme.fg('dim', '⎿')} ${jobDetail(item, theme, width - 5)}`;
+        // Focus is a pointer + emphasized task, not a full-width colored card.
+        lines.push(row, detail);
       }
       if (!jobs.length) lines.push(theme.fg('muted', ' No subagents yet. Ask the parent to launch some.'));
       lines.splice(this.bodyTop + this.bodyHeight);
       while (lines.length < this.bodyTop + this.bodyHeight) lines.push('');
     }
-    const note = this.notice || (this.viewing && job ? `${job.error || ''}${this.scroll.isFollowingEnd ? '  Following live output' : '  Scroll paused · Ctrl+End follows live output'}` : `${jobs.length} total · ${this.selected + (jobs.length ? 1 : 0)} selected`);
+    const note = this.notice || (this.viewing && job ? `${job.error || ''}${this.scroll.isFollowingEnd ? active(job) ? '  Following live output' : '  End of transcript' : '  Scroll paused · Ctrl+End follows live output'}`
+      : jobs.length ? `Agent ${this.selected + 1} of ${jobs.length} · ${job ? jobStats(job) : ''} · latest 20 finished retained` : 'No background work · your parent session is still active');
     if (editor.length) this.editorBounds = { top: lines.length, height: editor.length, offset: editorOffset, fullHeight: editorFullHeight };
     const noteColor = this.viewing && job?.error ? 'error' : this.notice ? 'accent' : 'muted';
-    lines.push(...editor, ...(compact ? [footer] : [theme.fg(noteColor, ` ${oneLine(note)}`), footer, rule(false)]));
+    lines.push(...editor, ...(compact ? [footer] : [rule(), theme.fg(noteColor, ` ${oneLine(note)}`), footer]));
     return lines.slice(0, height).map((line) => truncateToWidth(line, width));
   }
   invalidate() {
@@ -517,16 +542,21 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const running = all.filter(active);
           if (!all.length) return [];
           const theme = ctx.ui.theme;
-          const heading = theme.fg('border', running.length ? '╭─ ' : '── ')
-            + theme.fg('accent', theme.bold('Subagents')) + theme.fg('borderMuted', ' · ')
+          const failed = all.filter(job => job.status === 'failed').length;
+          const stopped = all.some(job => job.status === 'stopped');
+          const summaryColor = running.length ? 'accent' : failed ? 'error' : stopped ? 'warning' : 'success';
+          const summaryIcon = running.length ? FRAMES[Math.floor(Date.now() / 100) % FRAMES.length] : failed ? '✗' : stopped ? '■' : '✓';
+          const heading = theme.fg(summaryColor, `${summaryIcon} `)
+            + theme.fg('accent', theme.bold('Subagents')) + theme.fg('dim', ' · ')
             + theme.fg(running.length ? 'accent' : 'muted', `${running.length} running`)
             + theme.fg('muted', ` · ${all.length - running.length} finished`)
-            + theme.fg('dim', ' · ') + theme.fg('accent', 'Ctrl+Shift+A');
+            + (failed ? theme.fg('error', ` · ${failed} failed`) : '');
           return [
-            panelLine(heading, width, theme, 'customMessageBg'),
-            ...running.slice(0, 4).map((job, index) => theme.fg('border', index === running.length - 1 ? '╰ ' : '│ ')
-              + jobLine(job, theme, width - 2) + theme.fg('muted', ` · ${oneLine(job.activity)}`)),
-            ...(running.length > 4 ? [theme.fg('border', '╰─ ') + theme.fg('muted', `+${running.length - 4} more · /subagents to view all`)] : []),
+            columns(heading, theme.fg('dim', 'Ctrl+Shift+A to manage'), width),
+            ...running.slice(0, 4).map((job) => columns(
+              theme.fg('dim', '  ⎿ ') + theme.fg('text', oneLine(job.prompt)),
+              theme.fg('muted', `${oneLine(job.activity)} · ${elapsed(job)}`), width)),
+            ...(running.length > 4 ? [theme.fg('dim', `  ⎿ +${running.length - 4} more · /subagents`)] : []),
           ].map((line) => truncateToWidth(line, width));
         },
         handleMouse(event) {

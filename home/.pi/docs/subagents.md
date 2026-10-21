@@ -176,7 +176,15 @@ A completed child's report can already be inspected while its large-output file 
 
 Open with **`/subagents`**, **Ctrl+Shift+A**, or click the subagent widget. `/subagents <unique-ID-prefix>` opens a particular child.
 
-The dashboard is an overlay; it does not switch parent sessions. It shows native assistant messages, thinking blocks, tool execution/progress/errors, running timers, and completed transcripts. Theme-aware headers, colored lifecycle badges, and a two-line selection highlight distinguish task state and focus without changing the controls.
+The dashboard is an overlay; it does not switch parent sessions. Its presentation is heavily inspired by Claude Code's compact background-task UI, while retaining Pi's theme and native transcript components:
+
+- **Task-first rows:** assignment text takes priority over UUIDs, with lifecycle state and elapsed time aligned on the right when there is room.
+- **Quiet hierarchy:** flat headers, thin separators, a `›` selection pointer, and emphasized selected task text replace boxed panels and full-width selection backgrounds.
+- **Indented activity:** `⎿` detail lines show what each child is doing, queued guidance, its model, tool-use count, and reported token usage where space permits.
+- **Compact parent widget:** an animated asterisk-style indicator, running/finished counts, up to four indented active tasks, and a management shortcut. Failed results remain explicitly marked when work finishes.
+- **Child detail view:** a `Subagents / task` breadcrumb, subdued metadata (including the short ID), native messages, thinking/tool blocks, live-follow state, and the existing steering editor. Finished children no longer advertise unavailable steering/stop actions.
+
+Tool-use counts include started calls, including failed calls. Token totals sum provider-reported finalized assistant messages; live partial snapshots are not added, and zero/unknown totals are omitted. These are per-child UI metrics, not a new billing ledger or parent usage aggregation. Colors follow the current Pi theme rather than hardcoding Claude's palette. On narrow terminals, prompts/details are clipped safely and lower-priority metadata may be omitted.
 
 | Action | Default key |
 | --- | --- |
@@ -239,3 +247,4 @@ Tests use real in-process Agents and controlled provider streams, without paid A
 - Explicit waits for single/batched dependencies, timeouts, cancellation, failed children, retained results, and session cleanup.
 - A **real busy parent Agent** receiving child findings after its current tool completes and before its next model request—without an extra post-final follow-up.
 - Bounded history, output truncation, UI timers, scroll/focus behavior, mouse interaction, narrow terminals, and both real TUI renderers.
+- Task-first styling, aligned lifecycle states, compact widget failure indicators, real tool/token counters, and finished-transcript controls.
