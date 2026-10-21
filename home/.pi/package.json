@@ -5,9 +5,8 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "test:openrouter-web-search": "node --test agent/extensions/openrouter-web-search/openrouter-web-search.test.ts",
-    "test:openrouter-web-search:live": "node agent/extensions/openrouter-web-search/openrouter-web-search.live.ts",
-    "test:perplexity": "node --test agent/extensions/perplexity/perplexity.test.ts",
+    "test:web-tools": "node --test agent/extensions/web-tools/tests/*.test.ts",
+    "test:web-tools:live": "node agent/extensions/web-tools/tests/web-tools.live.ts",
     "test:subagents": "node --test agent/extensions/subagents/subagents.test.ts"
   },
   "overrides": {
