@@ -37,7 +37,7 @@ function harness(t, mode = 'print', renderer) {
   const widgets = new Map();
   const dialogs = [];
   const notices = [];
-  const theme = { fg: (_color, text) => text, bold: (text) => text };
+  const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
   const kb = new KeybindingsManager({ ...TUI_KEYBINDINGS,
     'app.thinking.toggle': { defaultKeys: 'ctrl+t' }, 'app.tools.expand': { defaultKeys: 'ctrl+o' },
   });
@@ -72,14 +72,14 @@ function harness(t, mode = 'print', renderer) {
   const notifications = [];
   const requests = [];
   const nested = [];
-  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_status'];
+  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status'];
   const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
   const ctx = {
     mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
     cwd: process.cwd(),
     model: parentModel,
     thinkingLevel: 'medium',
-    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_status'].map((name) => ({
+    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status'].map((name) => ({
       name, label: name, description: name, parameters: schema,
       execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
     })),
@@ -156,15 +156,50 @@ test('loads through Pi’s real extension loader', async (t) => {
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_status']);
+  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status']);
   assert.ok(result.extensions[0].commands.has('subagents'));
   assert.ok(result.extensions[0].shortcuts.has('ctrl+shift+a'));
 });
 
-test('registers launch, steer and status tools with structured output contracts', (t) => {
+test('registers launch, steer, wait and status tools with structured output contracts', (t) => {
   const h = harness(t);
-  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_status']);
+  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status']);
   for (const tool of h.tools.values()) assert.equal(tool.outputSchema.type, 'object');
+});
+
+test('launch description defaults to direct work and requires a worthwhile delegation benefit', (t) => {
+  const { description } = harness(t).tools.get('subagents_launch');
+  assert.match(description, /substantial, well-bounded tasks/);
+  assert.match(description, /parallel progress, context isolation, or independent verification/);
+  assert.match(description, /outweighs startup and coordination overhead/);
+  assert.match(description, /Work directly by default; independence alone is not enough/);
+  assert.match(description, /Reports arrive automatically/);
+});
+
+test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out and duplicate work', (t) => {
+  const { promptGuidelines } = harness(t).tools.get('subagents_launch');
+  const guidance = promptGuidelines.join('\n');
+  assert.match(guidance, /Work directly by default/);
+  assert.match(guidance, /outweighs delegation overhead/);
+  assert.match(guidance, /user explicitly requests subagents/);
+  assert.match(guidance, /Independence alone is not enough/);
+  for (const task of ['routine searches', 'a few file reads', 'small edits', 'ordinary test commands', 'tightly coupled planning/implementation/testing']) {
+    assert.ok(guidance.includes(task), `Missing keep-local guidance for ${task}`);
+  }
+  assert.match(guidance, /parallel tool calls for simple concurrency/);
+  assert.match(guidance, /Keep the immediate critical path local/);
+  assert.match(guidance, /immediately wait unless context isolation or independent verification/);
+  assert.match(guidance, /useful non-overlapping work the parent can continue/);
+  assert.match(guidance, /normally one or two/);
+  assert.match(guidance, /Add more only for clearly justified substantial workstreams/);
+  assert.match(guidance, /Do not duplicate delegated work/);
+  assert.match(guidance, /bounded outcome.*file ownership.*concise evidence/);
+  assert.match(guidance, /does not inherit conversation history/);
+  assert.doesNotMatch(guidance, /Use subagents_launch for independent work\./);
+  // Retain the background lifecycle and result-validation guidance.
+  assert.match(guidance, /automatically resume an idle parent/);
+  assert.match(guidance, /Do not declare delegated work complete until you have checked its result/);
+  assert.match(guidance, /Check each returned status before continuing/);
 });
 
 test('launch returns IDs without waiting; children run in parallel and notify out of order exactly once', async (t) => {
@@ -321,6 +356,7 @@ test('validates the entire batch before starting any child', async (t) => {
     { prompt: 'no recursion', tools: ['subagents_launch'] },
     { prompt: 'no orchestration', tools: ['subagents_steer'] },
     { prompt: 'no sibling inspection', tools: ['subagents_status'] },
+    { prompt: 'no sibling waiting', tools: ['subagents_wait'] },
     { prompt: '   ' },
   ]) {
     await assert.rejects(h.launch([{ prompt: 'valid' }, invalid]));
@@ -538,6 +574,7 @@ test('manual stop requires confirmation, aborts only the selected child, and not
   assert.match(screen(panel), /y stop/);
   panel.handleInput('n');
   assert.equal(h.requests[1].options.signal.aborted, false);
+  const waiting = h.call('subagents_wait', { ids: [ids[1]] });
   panel.handleInput('x');
   panel.handleInput('y');
   assert.equal(h.requests[0].options.signal.aborted, false);
@@ -546,6 +583,10 @@ test('manual stop requires confirmation, aborts only the selected child, and not
   assert.equal(h.notifications[0].message.details.id, ids[1]);
   assert.equal(h.notifications[0].message.details.status, 'stopped');
   assert.match(h.notifications[0].message.content, /Stopped by user/);
+  const waited = (await waiting).structuredContent;
+  assert.equal(waited.timedOut, false);
+  assert.equal(waited.agents[0].status, 'stopped');
+  assert.match(waited.agents[0].result, /Stopped by user/);
   const late = await h.steer(ids[1], 'cannot restart');
   assert.equal(late.structuredContent.accepted, false);
   assert.equal(late.structuredContent.agent.status, 'stopped');
@@ -637,7 +678,7 @@ test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidat
       }
     }
   }
-  h.ctx.ui.theme = { fg: (_color, text) => text, bold: (text) => `THEME:${text}` };
+  h.ctx.ui.theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => `THEME:${text}` };
   panel.invalidate();
   assert.match(screen(panel), /THEME:Subagents/);
   panel.handleInput('\x1b');
@@ -973,6 +1014,9 @@ test('a failed notification enqueue retains the completed report for status and 
   assert.equal(job.notification, 'failed');
   assert.equal(job.notificationError, 'synthetic enqueue failure');
   assert.match(job.result, /important child findings/);
+  const waited = (await h.call('subagents_wait', { ids: [id] })).structuredContent;
+  assert.equal(waited.timedOut, false);
+  assert.deepEqual(waited.agents, [job]);
   assert.match((await h.steer(id, 'late guidance')).structuredContent.agent.result, /important child findings/);
   assert.equal(h.requests.length, 1);
   assert.equal(h.notifications.length, 0);
@@ -1099,5 +1143,300 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     assert.equal(h.requests[1].options.signal.aborted, false);
     h.requests[1].finish('done');
     await until(() => h.notifications.length === 1);
+  });
+}
+
+test('wait declares required unique IDs, bounded integer timeout and structured results', (t) => {
+  const { parameters, outputSchema } = harness(t).tools.get('subagents_wait');
+  assert.deepEqual(parameters.required, ['ids']);
+  assert.equal(parameters.properties.ids.type, 'array');
+  assert.equal(parameters.properties.ids.minItems, 1);
+  assert.equal(parameters.properties.ids.uniqueItems, true);
+  assert.equal(parameters.properties.ids.items.type, 'string');
+  assert.equal(parameters.properties.ids.items.minLength, 1);
+  assert.equal(parameters.properties.timeoutMs.type, 'integer');
+  assert.equal(parameters.properties.timeoutMs.minimum, 1);
+  assert.equal(parameters.properties.timeoutMs.maximum, 2_147_483_647);
+  assert.equal(outputSchema.properties.timedOut.type, 'boolean');
+  assert.equal(outputSchema.properties.agents.type, 'array');
+});
+
+test('wait returns a single report without waiting for unrelated jobs or changing notifications', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch([{ prompt: 'selected' }, { prompt: 'unrelated' }]);
+  await until(() => h.requests.length === 2);
+  let resolved = false;
+  const waiting = h.call('subagents_wait', { ids: [ids[0]] }).then((result) => { resolved = true; return result; });
+  await setImmediate();
+  assert.equal(resolved, false);
+  assert.equal(h.requests.length, 2);
+  h.requests[0].finish('selected findings');
+  const output = await waiting;
+  assert.deepEqual(output.details, output.structuredContent);
+  assert.equal(output.structuredContent.timedOut, false);
+  assert.equal(output.structuredContent.agents.length, 1);
+  const [job] = output.structuredContent.agents;
+  assert.equal(job.id, ids[0]);
+  assert.equal(job.status, 'completed');
+  assert.equal(job.notification, 'queued');
+  assert.match(job.result, /selected findings/);
+  assert.match(output.content[0].text, /selected findings/);
+  assert.equal(h.requests[1].options.signal.aborted, false);
+  assert.equal((await h.call('subagents_status', { id: ids[1] })).structuredContent.agents[0].status, 'running');
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.notifications[0].message.details.id, ids[0]);
+  assert.deepEqual(h.notifications[0].options, { triggerTurn: true, deliverAs: 'steer' });
+  assert.equal(h.requests.length, 2);
+  h.requests[1].finish('unrelated findings');
+  await until(() => h.notifications.length === 2);
+});
+
+test('wait waits for ALL selected jobs, preserves requested order, and can recover already finished reports', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
+  await until(() => h.requests.length === 2);
+  const requested = [ids[1], ids[0]];
+  let resolved = false;
+  const waiting = h.call('subagents_wait', { ids: requested }).then((result) => { resolved = true; return result; });
+  h.requests[1].finish('second result');
+  await until(() => h.notifications.length === 1);
+  await setImmediate();
+  assert.equal(resolved, false);
+  h.requests[0].finish('first result');
+  const { structuredContent } = await waiting;
+  assert.equal(structuredContent.timedOut, false);
+  assert.deepEqual(structuredContent.agents.map((job) => job.id), requested);
+  assert.ok(structuredContent.agents.every((job) => job.status === 'completed' && job.notification === 'queued'));
+  assert.match(structuredContent.agents[0].result, /second result/);
+  assert.match(structuredContent.agents[1].result, /first result/);
+  for (const timeoutMs of [undefined, 1, 2_147_483_647]) {
+    assert.deepEqual((await h.call('subagents_wait', { ids: requested, timeoutMs })).structuredContent, structuredContent);
+  }
+  assert.equal(h.notifications.length, 2);
+  assert.equal(h.requests.length, 2);
+});
+
+for (const stopReason of ['error', 'aborted']) {
+  test(`wait treats provider ${stopReason} as finished and returns the failure report`, async (t) => {
+    const h = harness(t);
+    const { details: { ids } } = await h.launch([{ prompt: 'will fail' }]);
+    await until(() => h.requests.length === 1);
+    const waiting = h.call('subagents_wait', { ids });
+    h.requests[0].finish('partial findings', stopReason, { errorMessage: 'provider unavailable' });
+    const { structuredContent: result } = await waiting;
+    assert.equal(result.timedOut, false);
+    assert.equal(result.agents[0].status, 'failed');
+    assert.match(result.agents[0].result, /provider unavailable/);
+    assert.match(result.agents[0].result, /partial findings/);
+    assert.equal(h.notifications.length, 1);
+    assert.equal(h.requests.length, 1);
+  });
+}
+
+test('wait timeout returns completed and running snapshots without stopping children', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch([{ prompt: 'quick' }, { prompt: 'slow' }]);
+  await until(() => h.requests.length === 2);
+  h.requests[0].finish('quick result');
+  await h.call('subagents_wait', { ids: [ids[0]] });
+  const { structuredContent: result } = await h.call('subagents_wait', { ids, timeoutMs: 1 });
+  assert.equal(result.timedOut, true);
+  assert.deepEqual(result.agents.map((job) => job.id), ids);
+  assert.deepEqual(result.agents.map((job) => job.status), ['completed', 'running']);
+  assert.match(result.agents[0].result, /quick result/);
+  assert.equal(result.agents[1].result, null);
+  assert.equal(h.requests[1].options.signal.aborted, false);
+  h.requests[1].finish('slow result');
+  const completed = await h.call('subagents_wait', { ids });
+  assert.equal(completed.structuredContent.timedOut, false);
+  assert.match(completed.structuredContent.agents[1].result, /slow result/);
+  assert.equal(h.notifications.length, 2);
+  assert.equal(h.requests.length, 2);
+});
+
+test('aborting one wait rejects promptly without stopping jobs or another wait', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch([{ prompt: 'keep working' }]);
+  await until(() => h.requests.length === 1);
+  await assert.rejects(h.call('subagents_wait', { ids }, AbortSignal.abort()), /abort/i);
+  const controller = new AbortController();
+  const reason = new Error('cancel only this wait');
+  const waiting = h.call('subagents_wait', { ids, timeoutMs: 2_147_483_647 }, controller.signal);
+  const rejected = assert.rejects(waiting, (error) => error === reason);
+  const otherWait = h.call('subagents_wait', { ids });
+  controller.abort(reason);
+  await rejected;
+  assert.equal(h.requests[0].options.signal.aborted, false);
+  assert.equal(h.notifications.length, 0);
+  h.requests[0].finish('survived wait cancellation');
+  const result = await otherWait;
+  assert.equal(result.structuredContent.timedOut, false);
+  assert.match(result.structuredContent.agents[0].result, /survived wait cancellation/);
+  assert.equal(h.notifications.length, 1);
+});
+
+test('wait rejects empty, duplicate, inexact, unknown and malformed IDs and invalid timeouts', async (t) => {
+  const h = harness(t);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'valid retained job' }]);
+  await until(() => h.requests.length === 1);
+  await assert.rejects(h.call('subagents_wait', { ids: [] }), /At least one/);
+  await assert.rejects(h.call('subagents_wait', { ids: [id, id] }), /unique/);
+  for (const badId of ['', ' ', 'unknown', id.slice(0, 8), ` ${id}`, `${id} `, null, 123]) {
+    await assert.rejects(h.call('subagents_wait', { ids: [id, badId] }), /Unknown or no longer retained/);
+  }
+  for (const params of [{}, { ids: null }, { ids: id }, { ids: 12 }]) {
+    await assert.rejects(h.call('subagents_wait', params));
+  }
+  for (const timeoutMs of [0, -1, 1.5, 2_147_483_648, NaN, Infinity, '1', null, true]) {
+    await assert.rejects(h.call('subagents_wait', { ids: [id], timeoutMs }), /integer between 1 and 2147483647/);
+  }
+  assert.equal(h.requests.length, 1);
+  assert.equal(h.requests[0].options.signal.aborted, false);
+  assert.equal(h.notifications.length, 0);
+  await h.events.get('session_tree')();
+  await assert.rejects(h.call('subagents_wait', { ids: [id] }), /Unknown or no longer retained/);
+});
+
+for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
+  test(`${event} cancels pending waits before an uncooperative child tool settles`, async (t) => {
+    const h = harness(t);
+    let release;
+    let childSignal;
+    const gate = new Promise((resolve) => { release = resolve; });
+    h.ctx.executeTool = async (_name, _args, options) => {
+      childSignal = options.signal;
+      await gate; // Deliberately ignores cancellation until the test releases it.
+      return { result: { content: [{ type: 'text', text: 'released' }] }, isError: false };
+    };
+    const { details: { ids } } = await h.launch([{ prompt: 'blocked child tool' }]);
+    await until(() => h.requests.length === 1);
+    h.requests[0].finish('', 'toolUse', {
+      content: [{ type: 'toolCall', id: 'blocked', name: 'read', arguments: { path: 'slow.ts' } }],
+    });
+    await until(() => childSignal);
+    let rejected = false;
+    const waiting = assert.rejects(h.call('subagents_wait', { ids }), /session changed or shut down/)
+      .then(() => { rejected = true; });
+    let cleaned = false;
+    const cleanup = h.events.get(event)().then(() => { cleaned = true; });
+    try {
+      await until(() => rejected);
+      assert.equal(cleaned, false);
+      assert.equal(childSignal.aborted, true);
+      assert.equal(h.notifications.length, 0);
+    } finally {
+      release();
+      await cleanup;
+      await waiting;
+    }
+    assert.equal(h.notifications.length, 0);
+    assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  });
+}
+
+test('an in-flight wait retains selected jobs even after finished-history pruning', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch(Array.from({ length: 23 }, (_, i) => ({ prompt: `job ${i}` })));
+  await until(() => h.requests.length === ids.length);
+  let resolved = false;
+  const waiting = h.call('subagents_wait', { ids }).then((result) => { resolved = true; return result; });
+  for (let i = 0; i < 22; i++) {
+    h.requests[i].finish(`result ${i}`);
+    await until(() => h.notifications.length === i + 1);
+  }
+  await setImmediate();
+  assert.equal(resolved, false);
+  const retained = (await h.call('subagents_status', {})).structuredContent.agents;
+  assert.equal(retained.length, 21); // Latest 20 finished plus the last running job.
+  assert.ok(!retained.some((job) => job.id === ids[0]));
+  await assert.rejects(h.call('subagents_wait', { ids: [ids[0]] }), /Unknown or no longer retained/);
+  h.requests[22].finish('result 22');
+  const { structuredContent: result } = await waiting;
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(result.agents.map((job) => job.id), ids);
+  result.agents.forEach((job, i) => {
+    assert.equal(job.status, 'completed');
+    assert.ok(job.result.endsWith(`result ${i}`));
+  });
+  assert.equal(h.notifications.length, 23);
+  assert.equal(h.requests.length, 23);
+});
+
+test('wait remains pending through report artifact preparation and returns the final file', async (t) => {
+  const h = harness(t);
+  const originalWrite = fsPromises.writeFile;
+  let release;
+  let blocked = false;
+  let path;
+  const gate = new Promise((resolve) => { release = resolve; });
+  fsPromises.writeFile = async (...args) => {
+    path = args[0];
+    blocked = true;
+    await gate;
+    return originalWrite(...args);
+  };
+  syncBuiltinESMExports();
+  try {
+    const { details: { ids } } = await h.launch([{ prompt: 'large report' }]);
+    await until(() => h.requests.length === 1);
+    let resolved = false;
+    const waiting = h.call('subagents_wait', { ids }).then((result) => { resolved = true; return result; });
+    const answer = 'large report content\n'.repeat(3000);
+    h.requests[0].finish(answer);
+    await until(() => blocked);
+    await setImmediate();
+    assert.equal(resolved, false);
+    assert.equal(h.notifications.length, 0);
+    const { structuredContent: pending } = await h.call('subagents_wait', { ids, timeoutMs: 1 });
+    assert.equal(pending.timedOut, true); // Terminal status alone is not settlement.
+    assert.equal(pending.agents[0].status, 'completed');
+    assert.equal(pending.agents[0].notification, 'pending');
+    assert.match(pending.agents[0].result, /preparing full response file/);
+    release();
+    const { structuredContent: result } = await waiting;
+    assert.equal(result.timedOut, false);
+    assert.equal(result.agents[0].fullOutputPath, path);
+    assert.equal(result.agents[0].notification, 'queued');
+    assert.ok(result.agents[0].result.includes(path));
+    assert.doesNotMatch(result.agents[0].result, /preparing full response file/);
+    assert.ok((await readFile(path, 'utf8')).endsWith(answer));
+    assert.equal(h.notifications.length, 1);
+    assert.equal(h.notifications[0].message.details.fullOutputPath, path);
+  } finally {
+    release();
+    fsPromises.writeFile = originalWrite;
+    syncBuiltinESMExports();
+    await h.events.get('session_shutdown')();
+    if (path) await rm(dirname(path), { recursive: true, force: true });
+  }
+});
+
+for (const scrolled of [false, true]) {
+  test(`clicking a dashboard entry's second detail row opens the correct child${scrolled ? ' after list scrolling' : ''}`, async (t) => {
+    const h = harness(t, 'tui');
+    h.tui.terminal.rows = 20;
+    await h.launch(Array.from({ length: 12 }, (_, i) => ({ prompt: `mouse-target-${i}` })));
+    await until(() => h.requests.length === 12);
+    const opened = h.open();
+    const panel = h.dialogs[0].component;
+    if (scrolled) {
+      for (let i = 0; i < 11; i++) panel.handleInput('\x1b[B');
+    }
+    const lines = panel.render(96).map(stripTerminalSequences);
+    if (scrolled) assert.ok(!lines.some((line) => line.includes('mouse-target-0')));
+    // Choose a non-selected visible entry; its detail row has no task text.
+    const row = lines.findIndex((line) => line.includes('mouse-target-') && !line.includes('›'));
+    assert.ok(row >= 0);
+    const target = lines[row].match(/mouse-target-\d+/)[0];
+    assert.ok(!lines[row + 1].includes('mouse-target-'));
+    assert.equal(mouse(panel, row + 1)?.handled, true);
+    const detail = screen(panel);
+    assert.ok(detail.includes(target));
+    assert.match(detail, /Enter.*steer/); // Transcript/editor view, not merely a selected list row.
+    const displayedTasks = new Set(detail.match(/mouse-target-\d+/g));
+    assert.deepEqual([...displayedTasks], [target]);
+    panel.handleInput('\x1b');
+    panel.handleInput('\x1b');
+    await opened;
   });
 }

@@ -36,6 +36,10 @@ const Steer = Type.Object({
 const Inspect = Type.Object({
   id: Type.Optional(Type.String({ minLength: 1, description: 'Exact subagent ID. Omit to list retained jobs; supply an ID to include its result.' })),
 });
+const Wait = Type.Object({
+  ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, uniqueItems: true, description: 'Exact IDs of the subagents to wait for. Waits for all selected jobs.' }),
+  timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: 'Optional maximum wait in milliseconds. A timeout returns current snapshots without stopping children. Omit to wait until all reports are ready.' })),
+});
 const NullableString = Type.Union([Type.String(), Type.Null()]);
 const Snapshot = Type.Object({
   id: Type.String(), prompt: Type.String(), model: Type.String(), provider: Type.String(),
@@ -45,7 +49,7 @@ const Snapshot = Type.Object({
   error: NullableString, notificationError: NullableString,
   result: NullableString, fullOutputPath: NullableString,
 });
-const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status']);
+const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status', 'subagents_wait']);
 const DEFAULT_PROMPT = 'You are a general-purpose subagent. Complete the assigned task and return a clear, concise report to the parent agent. You share its working directory; coordinate file changes carefully.';
 const WIDGET = 'subagents.pi';
 const FRAMES = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
@@ -102,13 +106,21 @@ function elapsed(job: Job) {
   const seconds = Math.max(0, Math.floor(((job.finishedAt ?? Date.now()) - job.startedAt) / 1000));
   return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
 }
-function badge(job: Job, theme: Theme) {
-  if (active(job)) return theme.fg(job.status === 'stopping' ? 'warning' : 'accent', FRAMES[Math.floor(Date.now() / 100) % FRAMES.length]);
-  return theme.fg(job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning',
-    job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '■');
+function badge(job: Job, theme: Theme, compact = false) {
+  const color = job.status === 'running' ? 'accent' : job.status === 'completed' ? 'success' : job.status === 'failed' ? 'error' : 'warning';
+  const icon = active(job) ? FRAMES[Math.floor(Date.now() / 100) % FRAMES.length]
+    : job.status === 'completed' ? '✓' : job.status === 'failed' ? '✗' : '■';
+  return theme.fg(color, compact ? icon : `[${icon} ${job.status}]`);
 }
-function jobLine(job: Job, theme: Theme) {
-  return `${badge(job, theme)} ${job.id.slice(0, 8)} ${theme.fg('muted', elapsed(job))}  ${oneLine(job.prompt)}`;
+function jobLine(job: Job, theme: Theme, width: number) {
+  const divider = width < 32 ? ' ' : ` ${theme.fg('borderMuted', '│')} `;
+  return `${badge(job, theme, width < 60)} ${theme.fg('accent', job.id.slice(0, 8))} ${theme.fg('muted', elapsed(job))}${divider}${theme.fg('text', oneLine(job.prompt))}`;
+}
+function panelLine(text: string, width: number, theme: Theme, background: Parameters<Theme['bg']>[0]) {
+  // Truncation inserts full resets around its ellipsis. Reapply the surface after
+  // each reset so wide graphemes and clipped rows keep a continuous background.
+  return truncateToWidth(text, width, '…', true).split('\x1b[0m')
+    .map((part) => theme.bg(background, part)).join('\x1b[0m');
 }
 
 function prepare(task: TaskInput, ctx: ExtensionToolContext, thinkingLevel: ReturnType<ExtensionAPI['getThinkingLevel']>, defaultTools: string[]) {
@@ -357,26 +369,33 @@ class SubagentDashboard implements Component, Focusable {
     this.selected = Math.min(this.selected, Math.max(0, jobs.length - 1));
     const job = this.job;
     const height = Math.max(4, this.tui.terminal.rows - 4);
-    const border = theme.fg('border', '─'.repeat(Math.max(0, width)));
+    // Decorate the existing chrome without insetting native content: transcript/editor
+    // columns and the two-line list rows must retain their mouse coordinates.
+    const rule = (top: boolean) => theme.fg('border', width < 2 ? '─'.repeat(Math.max(0, width))
+      : `${top ? '╭' : '╰'}${'─'.repeat(width - 2)}${top ? '╮' : '╯'}`);
+    const key = (text: string) => theme.fg('accent', text);
+    const separator = theme.fg('borderMuted', ' · ');
     this.editorBounds = undefined;
     if (this.confirming) {
       this.composing.focused = false;
       this.bodyHeight = 0;
       // A dedicated compact screen keeps the destructive-action controls visible, even at eight rows.
       return [
-        theme.fg('warning', ` Stop ${this.confirming.id.slice(0, 8)}?`),
+        theme.fg('warning', theme.bold(` Stop ${this.confirming.id.slice(0, 8)}?`)),
         theme.fg('warning', ' y stop · n / Esc cancel'),
-        ` ${oneLine(this.confirming.prompt)}`,
-        theme.fg('dim', ' Cannot undo tool side effects.'),
-      ].slice(0, height).map((line) => truncateToWidth(line, width));
+        theme.fg('text', ` ${oneLine(this.confirming.prompt)}`),
+        theme.fg('muted', ' Cannot undo tool side effects.'),
+      ].slice(0, height).map((line) => panelLine(line, width, theme, 'toolErrorBg'));
     }
     const compact = height < 8;
     const running = jobs.filter(active).length;
-    const title = this.viewing && job ? ` ${jobLine(job, theme)}` : ` ${theme.bold('Subagents')}  ${running} running · ${jobs.length - running} finished`;
+    const title = this.viewing && job ? ` ${jobLine(job, theme, width - 1)}`
+      : ` ${theme.fg('accent', theme.bold('Subagents'))}  ${theme.fg(running ? 'accent' : 'muted', `${running} running`)}${separator}${theme.fg('muted', `${jobs.length - running} finished`)}`;
     const subtitle = this.viewing && job
-      ? ` ${job.status} · ${oneLine(job.agent.state.model.provider)}/${oneLine(job.agent.state.model.id)} · ${job.agent.state.thinkingLevel} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''}`
-      : ' ↑↓ select · Enter view / steer · x stop · Esc parent';
-    const lines = compact ? [title] : [border, title, theme.fg('muted', subtitle)];
+      ? ` ${width - 1 < 60 ? `${job.status} · ` : ''}${oneLine(job.agent.state.model.provider)}/${oneLine(job.agent.state.model.id)} · ${job.agent.state.thinkingLevel} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''}`
+      : ` ${key('↑↓')} select · ${key('Enter')} view / steer · ${key('x')} stop · ${key('Esc')} parent`;
+    const heading = panelLine(title, width, theme, 'customMessageBg');
+    const lines = compact ? [heading] : [rule(true), heading, theme.fg('muted', subtitle)];
     this.bodyTop = lines.length;
     let editor: string[] = [];
     let editorOffset = 0;
@@ -393,9 +412,11 @@ class SubagentDashboard implements Component, Focusable {
         editor = editor.slice(editorOffset, editorOffset + maxEditor);
       }
     }
-    const footer = compact ? theme.fg('muted', this.viewing ? ' Enter steer · Ctrl+X stop · Esc list' : ' Enter view · x stop · Esc parent')
-      : this.viewing ? theme.fg('muted', ' Enter steer · Ctrl+X stop · PgUp/PgDn scroll · Ctrl+O tools · Ctrl+T thinking · Esc list')
-        : theme.fg('dim', ' Ctrl+Shift+A / /subagents · history kept for this session (latest 20 finished)');
+    const footer = theme.fg('muted', compact
+      ? this.viewing ? ` ${key('Enter')} steer · ${key('Ctrl+X')} stop · ${key('Esc')} list`
+        : ` ${key('Enter')} view · ${key('x')} stop · ${key('Esc')} parent`
+      : this.viewing ? ` ${key('Enter')} steer · ${key('Ctrl+X')} stop · ${key('PgUp/PgDn')} scroll · ${key('Ctrl+O')} tools · ${key('Ctrl+T')} thinking · ${key('Esc')} list`
+        : ` ${key('Ctrl+Shift+A')} / ${key('/subagents')} · history kept for this session (latest 20 finished)`);
     this.bodyHeight = Math.max(0, height - lines.length - editor.length - (compact ? 1 : 3));
     if (this.viewing && job) {
       this.syncTranscript(job);
@@ -411,9 +432,11 @@ class SubagentDashboard implements Component, Focusable {
       if (this.selected >= this.contentTop + capacity) this.contentTop = this.selected - capacity + 1;
       for (const [offset, item] of jobs.slice(this.contentTop, this.contentTop + capacity).entries()) {
         const selected = offset + this.contentTop === this.selected;
-        lines.push(`${selected ? theme.fg('accent', ' ›') : '  '} ${jobLine(item, theme)}`);
-        const detail = `     ${item.status} · ${oneLine(item.activity)}${item.pendingSteers ? ` · ${item.pendingSteers} steering queued` : ''}`;
-        lines.push(theme.fg('dim', detail));
+        const row = `${selected ? theme.fg('accent', theme.bold(' ›')) : '  '} ${jobLine(item, theme, width - 3)}`;
+        const detail = `     ${theme.fg('muted', `${width - 3 < 60 ? `${item.status} · ` : ''}${oneLine(item.activity)}`)}${item.pendingSteers ? separator + theme.fg('warning', `${item.pendingSteers} steering queued`) : ''}`;
+        // Paint both rows, including their trailing cells, as one selection band.
+        lines.push(selected ? panelLine(row, width, theme, 'selectedBg') : row);
+        lines.push(selected ? panelLine(detail, width, theme, 'selectedBg') : detail);
       }
       if (!jobs.length) lines.push(theme.fg('muted', ' No subagents yet. Ask the parent to launch some.'));
       lines.splice(this.bodyTop + this.bodyHeight);
@@ -421,7 +444,8 @@ class SubagentDashboard implements Component, Focusable {
     }
     const note = this.notice || (this.viewing && job ? `${job.error || ''}${this.scroll.isFollowingEnd ? '  Following live output' : '  Scroll paused · Ctrl+End follows live output'}` : `${jobs.length} total · ${this.selected + (jobs.length ? 1 : 0)} selected`);
     if (editor.length) this.editorBounds = { top: lines.length, height: editor.length, offset: editorOffset, fullHeight: editorFullHeight };
-    lines.push(...editor, ...(compact ? [footer] : [theme.fg('muted', ` ${oneLine(note)}`), footer, border]));
+    const noteColor = this.viewing && job?.error ? 'error' : this.notice ? 'accent' : 'muted';
+    lines.push(...editor, ...(compact ? [footer] : [theme.fg(noteColor, ` ${oneLine(note)}`), footer, rule(false)]));
     return lines.slice(0, height).map((line) => truncateToWidth(line, width));
   }
   invalidate() {
@@ -493,10 +517,16 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           const running = all.filter(active);
           if (!all.length) return [];
           const theme = ctx.ui.theme;
+          const heading = theme.fg('border', running.length ? '╭─ ' : '── ')
+            + theme.fg('accent', theme.bold('Subagents')) + theme.fg('borderMuted', ' · ')
+            + theme.fg(running.length ? 'accent' : 'muted', `${running.length} running`)
+            + theme.fg('muted', ` · ${all.length - running.length} finished`)
+            + theme.fg('dim', ' · ') + theme.fg('accent', 'Ctrl+Shift+A');
           return [
-            theme.fg('accent', ` Subagents · ${running.length} running`) + theme.fg('dim', ` · ${all.length - running.length} finished · Ctrl+Shift+A`),
-            ...running.slice(0, 4).map((job) => ` ${jobLine(job, theme)} ${theme.fg('dim', `· ${oneLine(job.activity)}`)}`),
-            ...(running.length > 4 ? [theme.fg('muted', ` +${running.length - 4} more · /subagents to view all`)] : []),
+            panelLine(heading, width, theme, 'customMessageBg'),
+            ...running.slice(0, 4).map((job, index) => theme.fg('border', index === running.length - 1 ? '╰ ' : '│ ')
+              + jobLine(job, theme, width - 2) + theme.fg('muted', ` · ${oneLine(job.activity)}`)),
+            ...(running.length > 4 ? [theme.fg('border', '╰─ ') + theme.fg('muted', `+${running.length - 4} more · /subagents to view all`)] : []),
           ].map((line) => truncateToWidth(line, width));
         },
         handleMouse(event) {
@@ -588,6 +618,31 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     { triggerTurn: true, deliverAs: 'steer' });
     job.notification = 'queued';
   }
+  function waitForJobs(selected: Job[], signal?: AbortSignal, timeoutMs?: number): Promise<boolean> {
+    // Subscribe to lifecycle changes rather than polling. Keep object references so history
+    // pruning cannot invalidate an in-flight wait for a larger batch.
+    return new Promise((resolve, reject) => {
+      let deadline: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe = () => {};
+      const finish = (timedOut: boolean, error?: unknown) => {
+        unsubscribe();
+        if (deadline) clearTimeout(deadline);
+        signal?.removeEventListener('abort', abort);
+        if (error !== undefined) reject(error);
+        else resolve(timedOut);
+      };
+      const abort = () => finish(false, signal?.reason ?? new Error('Subagent wait aborted.'));
+      const check = () => {
+        if (selected.some((job) => job.cancelled)) finish(false, new Error('Subagent wait cancelled: the session changed or shut down.'));
+        else if (selected.every((job) => job.settled)) finish(false);
+      };
+      unsubscribe = subscribe(check);
+      signal?.addEventListener('abort', abort, { once: true });
+      if (timeoutMs !== undefined) deadline = setTimeout(() => finish(true), timeoutMs);
+      if (signal?.aborted) abort();
+      else check();
+    });
+  }
   async function cleanup() {
     const pending = [...jobs.values()];
     jobs.clear(); // Do not accidentally clear newly launched jobs after awaiting old cancellations.
@@ -596,6 +651,7 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     uiContext?.ui.setWidget(WIDGET, undefined);
     uiContext = undefined;
     for (const job of pending) { job.cancelled = true; job.unsubscribe?.(); job.agent.clearAllQueues(); job.agent.abort(); }
+    refresh(); // Release waits immediately, even when a child tool ignores cancellation.
     await Promise.allSettled(pending.map((job) => job.done));
   }
   pi.on('session_shutdown', cleanup);
@@ -614,12 +670,17 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.registerShortcut('ctrl+shift+a', { description: 'Open live subagent dashboard', handler: (ctx) => dashboard(ctx) });
   pi.registerTool({
     name: 'subagents_launch', label: 'Launch subagents',
-    description: 'Launch general-purpose subagents in parallel in the background. Returns structured IDs and task metadata immediately, not answers. Each child has isolated history and shares the parent workspace and callable tools. Completion or failure delivers a report at the next safe parent turn boundary, or resumes an idle parent. No polling needed.',
+    description: 'Delegate substantial, well-bounded tasks to background subagents only when parallel progress, context isolation, or independent verification clearly outweighs startup and coordination overhead. Work directly by default; independence alone is not enough. Returns IDs and metadata immediately, not answers. Children have isolated history and share the parent workspace and callable tools. Reports arrive automatically at a safe parent turn boundary or resume an idle parent. No polling needed.',
     promptGuidelines: [
-      'Use subagents_launch for independent work. Give each child all necessary context in its prompt; it does not inherit conversation history.',
+      'Work directly by default. Use subagents_launch only for substantial, well-bounded tasks where parallel progress, context isolation, or independent verification clearly outweighs delegation overhead, or when the user explicitly requests subagents. Independence alone is not enough.',
+      'Keep routine searches, a few file reads, small edits, ordinary test commands, and tightly coupled planning/implementation/testing in the parent. Use parallel tool calls for simple concurrency, not separate agents.',
+      'Keep the immediate critical path local. Do not launch a child just to immediately wait unless context isolation or independent verification justifies the handoff. For parallel work, identify useful non-overlapping work the parent can continue.',
+      'Use the smallest useful number of children: normally one or two, not one per file, command, or phase. Add more only for clearly justified substantial workstreams. Do not duplicate delegated work; review and integrate the returned evidence instead.',
+      'Delegate a bounded outcome with relevant context, file paths, constraints, explicit file ownership when editing, and expected concise evidence or results. Each child starts fresh and does not inherit conversation history.',
       'Subagents run in the background. Continue useful work or end your turn; completion reports arrive at the next safe turn boundary and automatically resume an idle parent.',
       'Coordinate shared-file edits to avoid conflicts. Use subagents_steer to redirect a running child. If it has finished, steering returns its result without restarting it.',
       'Use subagents_status to inspect progress or recover a retained result when needed, not in a polling loop. Do not declare delegated work complete until you have checked its result.',
+      'Use subagents_wait with one or more exact IDs when the next step depends on their results. It blocks until all selected reports are ready; failures and manual stops also finish a wait. Check each returned status before continuing.',
     ],
     parameters: Launch,
     outputSchema: Type.Object({ ids: Type.Array(Type.String()), agents: Type.Array(Snapshot) }),
@@ -670,6 +731,36 @@ export default function subagentsExtension(pi: ExtensionAPI) {
           : `Subagent ${job.id} is ${job.status}; guidance was not queued and the child was not restarted.\n\n${job.result ?? 'The final report is not ready yet.'}` }],
         details: { id: job.id, accepted, status: job.status },
         structuredContent: { accepted, agent },
+      };
+    },
+  });
+  pi.registerTool({
+    name: 'subagents_wait', label: 'Wait for subagents',
+    description: 'Wait for all specified background subagents to finish and prepare their reports, without polling or making model calls. Returns results for completed, failed, or stopped jobs. Optional timeout returns current snapshots with timedOut:true. Cancelling the wait or timing out does not stop children. Automatic completion notifications remain enabled. IDs must be exact and retained when the call starts.',
+    parameters: Wait,
+    outputSchema: Type.Object({ timedOut: Type.Boolean(), agents: Type.Array(Snapshot) }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    async execute(_callId, params, signal) {
+      signal?.throwIfAborted();
+      if (!params.ids.length) throw new Error('At least one subagent ID is required.');
+      if (new Set(params.ids).size !== params.ids.length) throw new Error('Subagent IDs must be unique.');
+      if (params.timeoutMs !== undefined && (!Number.isInteger(params.timeoutMs) || params.timeoutMs < 1 || params.timeoutMs > 2_147_483_647)) {
+        throw new Error('timeoutMs must be an integer between 1 and 2147483647.');
+      }
+      const selected = params.ids.map((id) => {
+        const job = jobs.get(id);
+        if (!job) throw new Error(`Unknown or no longer retained subagent: ${id}`);
+        return job;
+      });
+      const timedOut = await waitForJobs(selected, signal, params.timeoutMs);
+      const agents = selected.map((job) => snapshot(job, true));
+      const report = truncateHead([
+        timedOut ? 'Wait timed out; unfinished children continue in the background.' : 'All selected subagents have finished. Check their statuses before depending on results.',
+        ...agents.map((agent) => `${agent.id} · ${agent.status} · ${agent.activity}\n\n${agent.result ?? '(No final report yet.)'}`),
+      ].join('\n\n'));
+      return {
+        content: [{ type: 'text', text: report.content + (report.truncated ? '\n\n[Combined output truncated. Use subagents_status with an exact ID to recover individual reports.]' : '') }],
+        details: { timedOut, agents }, structuredContent: { timedOut, agents },
       };
     },
   });

@@ -18,7 +18,8 @@
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
   "extensions": [
-    "-extensions/perplexity.ts"
+    "-extensions/perplexity.ts",
+    "-extensions/openrouter-web-search.ts"
   ],
   "subagents": {
     "disableBuiltins": true
