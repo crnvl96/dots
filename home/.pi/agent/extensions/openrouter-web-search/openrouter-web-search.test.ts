@@ -1,5 +1,5 @@
 // Offline tests; all HTTP is synthetic and unexpected fetches fail closed.
-// Run from home/.pi: node --test tests/openrouter-web-search.test.ts
+// Run from home/.pi: npm run test:openrouter-web-search
 import assert from 'node:assert/strict';
 import { readFile, rm, stat } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -8,8 +8,8 @@ import test, { beforeEach } from 'node:test';
 import openrouterWebSearch, {
   MODEL, ENDPOINT, TIMEOUT_MS, SEARCH_PARAMETERS, FETCH_PARAMETERS,
   buildRequest, normalizeUrl, resolveApiKey, postRequest, serverToolUsage,
-  parseResponse, toPiUsage, formatResult, retrieve,
-} from '../agent/extensions/openrouter-web-search.ts';
+  parseResponse, toPiUsage, formatResult, retrieve, toSearchContent, toFetchContent,
+} from './index.ts';
 
 beforeEach((t) => {
   t.mock.method(globalThis, 'fetch', async () => {
@@ -65,14 +65,14 @@ function result() {
   return parseResponse('search', 'synthetic query', fixture());
 }
 
-test('search request uses only advanced Parallel search with inner and outer limits of 10', () => {
+test('search request uses one advanced Parallel search with Perplexity-like defaults', () => {
   const body = buildRequest('search', '  synthetic query  ');
   assert.equal(body.model, MODEL);
   assert.equal(body.stream, false);
-  assert.equal(body.max_tool_calls, 10);
+  assert.equal(body.max_tool_calls, 1);
   assert.equal(body.max_tokens, 8_000);
   assert.deepEqual(body.tools, [{ type: 'openrouter:web_search', parameters: {
-    engine: 'parallel', mode: 'advanced', max_results: 10, max_uses: 10,
+    engine: 'parallel', mode: 'advanced', max_results: 8, search_context_size: 'medium', max_uses: 1,
   } }]);
   assert.deepEqual(SEARCH_PARAMETERS, body.tools[0].parameters);
   assert.equal(body.messages.length, 2);
@@ -93,16 +93,16 @@ test('search request uses only advanced Parallel search with inner and outer lim
 test('fetch request exposes only web_fetch and normalizes URL and objective', () => {
   const body = buildRequest('fetch', 'HTTPS://EXAMPLE.COM:443/a', '  Extract pricing  ');
   assert.deepEqual(body.tools, [{ type: 'openrouter:web_fetch', parameters: {
-    engine: 'parallel', max_uses: 10, max_content_tokens: 50_000,
+    engine: 'parallel', max_uses: 1, max_content_tokens: 50_000,
   } }]);
   assert.deepEqual(FETCH_PARAMETERS, body.tools[0].parameters);
-  assert.equal(body.max_tool_calls, 10);
+  assert.equal(body.max_tool_calls, 1);
   assert.deepEqual(JSON.parse(body.messages[1].content), { url: 'https://example.com/a', objective: 'Extract pricing' });
   assert.match(body.messages[0].content, /Fetch exactly the supplied URL/);
   assert.match(body.messages[0].content, /Do not search or substitute/);
   for (const objective of [undefined, '', '  ']) {
     assert.deepEqual(JSON.parse(buildRequest('fetch', 'https://example.com', objective).messages[1].content), {
-      url: 'https://example.com/', objective: 'Extract the main readable page content.',
+      url: 'https://example.com/', objective: 'Return enough of the page content for another assistant to summarize it.',
     });
   }
 });
@@ -112,9 +112,9 @@ test('request parameters are independent copies and user inputs remain data', ()
   const body = buildRequest('search', query);
   assert.deepEqual(JSON.parse(body.messages[1].content), { query });
   assert.ok(!body.messages[0].content.includes(query));
-  body.tools[0].parameters.max_uses = 1;
-  assert.equal(buildRequest('search', 'next').tools[0].parameters.max_uses, 10);
-  assert.equal(SEARCH_PARAMETERS.max_uses, 10);
+  body.tools[0].parameters.max_uses = 9;
+  assert.equal(buildRequest('search', 'next').tools[0].parameters.max_uses, 1);
+  assert.equal(SEARCH_PARAMETERS.max_uses, 1);
 });
 
 test('URL validation accepts absolute HTTP(S) and rejects unsupported or credential-bearing inputs', () => {
@@ -460,6 +460,7 @@ test('factory registers exactly two retrieval-only tools with input/output contr
     assert.equal(tool.outputSchema.type, 'object');
     assert.deepEqual(Object.keys(tool.outputSchema.properties).sort(), [
       'operation', 'input', 'status', 'report', 'sources', 'request_id', 'model', 'tool_calls', 'cost_usd', 'full_output_path',
+      ...(tool.name === 'openrouter_web_search' ? ['query', 'results'] : ['url', 'source_url', 'title', 'content', 'notes']),
     ].sort());
     assert.deepEqual([...tool.outputSchema.required].sort(), Object.keys(tool.outputSchema.properties).sort());
     assert.match(tool.description, /1000 lines\/25 KiB/);
@@ -503,7 +504,9 @@ test('registered execute methods use isolated requests, emit progress, and retur
     assert.match(output.content[0].text, /Untrusted web data/);
     assert.equal(output.structuredContent.operation, operation);
     assert.equal(output.structuredContent.input, operation === 'search' ? 'offline query' : 'https://example.com/');
-    assert.equal(output.details.result, output.structuredContent);
+    for (const [key, value] of Object.entries(output.details.result)) {
+      assert.deepEqual(output.structuredContent[key], value, `Preserve legacy field ${key}`);
+    }
     assert.deepEqual(output.details.serverToolUsage, payload.usage.server_tool_use_details);
     assert.deepEqual(output.usage, toPiUsage(payload));
     assert.equal(output.isError, false);
@@ -521,6 +524,107 @@ test('execute supports omitted progress callback and distinguishes provider erro
     assert.equal(output.structuredContent.status, status);
     assert.equal(output.usage.cost.total, 0.0123);
   }
+});
+
+test('search controls are validated and forwarded without pretending to support recency', async (t) => {
+  environment(t);
+  const tool = registeredTools()[0];
+  assert.equal(tool.parameters.properties.max_results.minimum, 1);
+  assert.equal(tool.parameters.properties.max_results.maximum, 20);
+  assert.equal(tool.parameters.properties.recency, undefined);
+  for (const max_results of [1, 8, 20]) {
+    for (const search_context_size of ['low', 'medium', 'high']) {
+      t.mock.method(globalThis, 'fetch', async (_url, init) => {
+        const request = JSON.parse(init.body);
+        assert.deepEqual(request.tools[0].parameters, {
+          ...SEARCH_PARAMETERS, max_results, search_context_size,
+        });
+        assert.equal(request.max_tool_calls, 1);
+        return jsonResponse(fixture());
+      });
+      const output = await tool.execute('id', { query: 'test', max_results, search_context_size },
+        undefined, undefined, context());
+      assert.equal(output.structuredContent.query, 'test');
+      assert.deepEqual(output.structuredContent.results, [{
+        title: 'Synthetic page', url: 'https://example.com/article',
+        snippet: 'Synthetic source excerpt.', date: null, last_updated: null,
+      }]);
+    }
+  }
+  for (const max_results of [0, 21, 1.5, NaN, Infinity, '8']) {
+    assert.throws(() => buildRequest('search', 'test', undefined, { max_results }), /max_results/);
+  }
+  assert.throws(() => buildRequest('search', 'test', undefined, { search_context_size: 'huge' }), /search_context_size/);
+});
+
+test('compatibility fields preserve provenance, missing values, and legacy metadata', () => {
+  const parsed = result();
+  parsed.sources.push({ title: 'No excerpt', url: 'https://example.com/empty', excerpt: null });
+  const search = toSearchContent(parsed);
+  assert.equal(search.results[1].snippet, '');
+  assert.equal(search.results[0].date, null);
+  assert.equal(search.report, parsed.report);
+  parsed.sources = [];
+  assert.deepEqual(toSearchContent(parsed).results, []);
+  const fetched = parseResponse('fetch', 'https://example.com/article', fixture('fetch'));
+  assert.equal(toFetchContent(fetched).content, 'Synthetic source excerpt.');
+  assert.equal(toFetchContent(fetched).source_url, fetched.input);
+  assert.equal(toFetchContent(fetched).notes, fetched.report);
+  for (const sources of [[], [{ title: 'Other', url: 'https://example.com/redirect', excerpt: 'Unverified redirect' }]]) {
+    fetched.sources = sources;
+    const output = toFetchContent(fetched);
+    assert.equal(output.content, null);
+    assert.equal(output.source_url, null);
+    assert.equal(output.title, null);
+    assert.equal(output.notes, fetched.report);
+  }
+});
+
+test('source-first Markdown keeps synthesis separate and handles missing annotations', async () => {
+  const parsed = result();
+  let text = await formatResult(parsed);
+  assert.ok(text.indexOf('Synthetic source excerpt.') < text.indexOf('## Model-processed retrieval report'));
+  assert.match(text, /not guaranteed ranking/);
+  parsed.sources = [];
+  text = await formatResult(parsed);
+  assert.match(text, /No provider source annotations/);
+  assert.ok(text.includes(parsed.report));
+});
+
+test('renderers show progress, citations, honest fetch counts, errors, cost, and truncation', () => {
+  const theme = { fg: (_color, text) => text, bold: text => text };
+  const render = (tool, output, options = {}) => tool.renderResult(output, {
+    expanded: false, isPartial: false, ...options,
+  }, theme).render(120).join('\n');
+  const [search, fetch] = registeredTools();
+  assert.match(search.renderCall({ query: 'test' }, theme).render(120).join('\n'), /openrouter_web_search.*test/);
+  assert.match(fetch.renderCall({ url: 'https://example.com' }, theme).render(120).join('\n'), /openrouter_web_fetch/);
+  assert.match(render(search, {}, { isPartial: true }), /Searching/);
+  assert.match(render(fetch, {}, { isPartial: true }), /Fetching/);
+  assert.match(render(search, {}), /failed/);
+  const parsed = result();
+  assert.match(render(search, { details: { result: parsed } }), /1 source citation/);
+  parsed.full_output_path = '/tmp/example/output.md';
+  const expanded = render(search, { details: { result: parsed } }, { expanded: true });
+  assert.match(expanded, /Synthetic page/);
+  assert.match(expanded, /https:\/\/example.com\/article/);
+  assert.match(expanded, /0.012300/);
+  assert.match(expanded, /truncated/);
+  assert.ok(expanded.includes(parsed.full_output_path));
+  parsed.sources = [];
+  assert.match(render(search, { details: { result: parsed } }), /report only/);
+  assert.match(render(fetch, { details: { result: parsed } }), /no matching provider excerpt/);
+  const page = parseResponse('fetch', 'https://example.com/article', fixture('fetch'));
+  assert.match(render(fetch, { details: { result: page } }), /provider-excerpt characters/);
+  for (const status of ['error', 'not_found']) {
+    parsed.status = status;
+    const text = render(fetch, { details: { result: parsed } }, { expanded: true });
+    assert.match(text, status === 'error' ? /failed/ : /No relevant content/);
+    assert.doesNotMatch(text, /Retrieved/);
+    assert.ok(text.includes(parsed.report));
+  }
+  page.status = 'ok';
+  assert.match(render(fetch, { details: { result: page }, isError: true }), /failed/);
 });
 
 test('retrieve and execute reject invalid inputs, missing credentials, ungrounded reports, and HTTP errors', async (t) => {

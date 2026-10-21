@@ -1,6 +1,6 @@
 // Perplexity tools for Pi: perplexity_search (ranked web results with excerpts)
 // and perplexity_fetch (content from a known HTTP/HTTPS URL). Pi discovers this
-// file directly in the extensions directory.
+// directory through index.ts.
 //
 // Configuration: export PERPLEXITY_API_KEY in the environment that starts Pi,
 // then restart Pi. Optionally set PERPLEXITY_API_BASE_URL to override
@@ -15,9 +15,8 @@
 // Both tools declare an outputSchema, so codemode scripts receive structured,
 // untruncated results instead of the Markdown text.
 //
-// Tests live in tests/perplexity.test.ts (kept out of the extensions
-// directory so Pi does not load them as an extension). Run them with
-// `npm run test:perplexity` from home/.pi.
+// Tests live beside this file. Pi does not load them: only index.ts is the
+// directory entry point. Run them with `npm run test:perplexity` from home/.pi.
 
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

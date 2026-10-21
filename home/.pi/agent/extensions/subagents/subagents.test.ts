@@ -12,7 +12,7 @@ import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
 import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
-import extension from '../agent/extensions/subagents.pi.ts';
+import extension from './index.ts';
 
 const parentModel = {
   id: 'parent-model', provider: 'parent-provider', api: 'openai-completions',
@@ -172,7 +172,7 @@ test('loads through Pi’s real extension loader', async (t) => {
   const loader = new DefaultResourceLoader({
     cwd: directory, agentDir: directory, settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    additionalExtensionPaths: [fileURLToPath(new URL('../agent/extensions/subagents.pi.ts', import.meta.url))],
+    additionalExtensionPaths: [fileURLToPath(new URL('./index.ts', import.meta.url))],
   });
   await loader.reload();
   const result = loader.getExtensions();

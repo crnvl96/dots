@@ -2,7 +2,7 @@
 
 An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
 
-Source: `home/.pi/agent/extensions/subagents.pi.ts`.
+Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`.
 
 ## Delegation policy
 
@@ -245,13 +245,13 @@ The tools also work in print, JSON, and RPC modes. The dashboard and animated wi
 
 ## Installation
 
-The dotfiles source is linked into `~/.pi/agent/extensions/subagents.pi.ts`, where Pi discovers it automatically. Run `/reload` after code changes, preferably once current children have finished: reloading cancels their runtime.
+The dotfiles source is linked into `~/.pi/agent/extensions/subagents`, where Pi discovers `index.ts` automatically. Tests and this README sit beside it and are not loaded. Run `/reload` after code changes, preferably once current children have finished: reloading cancels their runtime.
 
 To load only this extension for one invocation:
 
 ```sh
 pi --no-extensions \
-  -e ~/Documents/dotfiles/home/.pi/agent/extensions/subagents.pi.ts
+  -e ~/Documents/dotfiles/home/.pi/agent/extensions/subagents
 ```
 
 It is independent of the Perplexity and OpenRouter web extensions. A child can use their tools when they are available and selected.

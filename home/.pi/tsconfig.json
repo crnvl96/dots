@@ -8,5 +8,5 @@
     "moduleResolution": "bundler"
   },
   "include": ["agent/**/*"],
-  "exclude": ["**/*.test.ts"]
+  "exclude": ["**/*.test.ts", "**/*.live.ts"]
 }

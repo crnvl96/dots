@@ -9,16 +9,16 @@ Search is a direct Search API request, not a nested chat completion. Fetch uses 
 
 ## Installation and credentials
 
-Source: `home/.pi/agent/extensions/perplexity.ts` in this dotfiles repo.
+Source: `home/.pi/agent/extensions/perplexity/` in this dotfiles repo. Pi loads `index.ts`.
 
-Pi normally discovers files in `~/.pi/agent/extensions/`, but the current `home/.pi/agent/settings.json` explicitly excludes this extension with `"-extensions/perplexity.ts"`. Its presence on disk does **not** mean it is enabled.
+Pi normally discovers that directory from `~/.pi/agent/extensions/`, but `home/.pi/agent/settings.json` explicitly excludes it with `"-extensions/perplexity/index.ts"`. Its presence on disk does **not** mean it is enabled.
 
 For a one-off isolated launch without changing settings:
 
 ```sh
 export PERPLEXITY_API_KEY='your-key'
 pi --no-extensions \
-  -e ~/Documents/dotfiles/home/.pi/agent/extensions/perplexity.ts
+  -e ~/Documents/dotfiles/home/.pi/agent/extensions/perplexity
 ```
 
 `--no-extensions` disables automatic extension loading (including built-ins); `-e` explicitly loads this extension. For persistent use, remove the exclusion from your own settings and let normal discovery load it. This documentation does not change settings.
@@ -164,7 +164,7 @@ From `home/.pi`:
 npm run test:perplexity
 ```
 
-The package requires Node.js 24 or newer. Tests live in `tests/perplexity.test.ts`, outside the extension discovery directory.
+The package requires Node.js 24 or newer. Tests live in `perplexity.test.ts` beside `index.ts`. Pi does not load them: a directory entry is only `index.ts`.
 
 Coverage includes credentials and base URL handling, JSON headers/body, timeout signal creation, cancellation and timeout errors, API error extraction/fallbacks, malformed responses, search parsing/Markdown, URL normalization/rejection, fetch parsing/Markdown, cost extraction, and structured-content conversion/null defaults.
 

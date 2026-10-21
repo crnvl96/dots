@@ -5,10 +5,10 @@
     "node": ">=24.0.0"
   },
   "scripts": {
-    "test:openrouter-web-search": "node --test tests/openrouter-web-search.test.ts",
-    "test:openrouter-web-search:live": "node tests/openrouter-web-search.live.ts",
-    "test:perplexity": "node --test tests/perplexity.test.ts",
-    "test:subagents": "node --test tests/subagents.test.ts"
+    "test:openrouter-web-search": "node --test agent/extensions/openrouter-web-search/openrouter-web-search.test.ts",
+    "test:openrouter-web-search:live": "node agent/extensions/openrouter-web-search/openrouter-web-search.live.ts",
+    "test:perplexity": "node --test agent/extensions/perplexity/perplexity.test.ts",
+    "test:subagents": "node --test agent/extensions/subagents/subagents.test.ts"
   },
   "overrides": {
     "@earendil-works/pi-codemode": "1.3.0"
