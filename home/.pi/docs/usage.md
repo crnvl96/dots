@@ -2,7 +2,7 @@
 
 A private, on-demand balance dashboard for Pi 1.3.0. Source: `home/.pi/agent/extensions/usage.ts`.
 
-Run `/usage` to open a centered, theme-aware overlay with rounded borders, Codex usage bars, and provider balances. Each card loads independently; a failed provider does not block the others.
+Run `/usage` to open a centered, theme-aware overlay with accent-colored rounded borders, Codex usage bars, and provider balances. Compact layouts retain the frame whenever at least three rows and two columns are available. Each card loads independently; a failed provider does not block the others.
 
 - **r** refreshes all providers (ignored while already loading).
 - **Esc**, **Enter**, **q**, or **Ctrl+C** closes and cancels outstanding work.

@@ -10,14 +10,18 @@ import {
   type KeybindingsManager, type Theme,
 } from '@earendil-works/pi-coding-agent';
 import {
-  Container, Editor, ScrollView, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth,
+  Container, Editor, ScrollView, Text, matchesKey, stripTerminalSequences, truncateToWidth, visibleWidth,
   type Component, type Focusable, type TUI, type TuiMouseEvent,
 } from '@earendil-works/pi-tui';
 import { Type, type Static } from 'typebox';
 
 // One general-purpose type; in-process agents, isolated history, shared workspace.
-// /subagents or Ctrl+Shift+A opens the live dashboard without switching parent sessions.
+// Clicking the widget opens the live dashboard without switching parent sessions.
+const NAME_PATTERN = '^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$';
+const NAME_MAX_LENGTH = 48;
 const Task = Type.Object({
+  name: Type.String({ minLength: 1, maxLength: NAME_MAX_LENGTH, pattern: NAME_PATTERN,
+    description: 'Meaningful short kebab-case name, e.g. review-parser. This is the agent ID for all tools and UI. Must be unique for this session, including discarded agents.' }),
   prompt: Type.String({ minLength: 1 }),
   model: Type.Optional(Type.String({ minLength: 1, description: 'Model ID; defaults to the parent model ID.' })),
   provider: Type.Optional(Type.String({ minLength: 1, description: 'Defaults to the parent provider.' })),
@@ -30,15 +34,18 @@ const Task = Type.Object({
 });
 const Launch = Type.Object({ tasks: Type.Array(Task, { minItems: 1 }) });
 const Steer = Type.Object({
-  id: Type.String({ minLength: 1 }),
+  id: Type.String({ minLength: 1, description: 'Exact kebab-case name assigned at launch (the agent ID).' }),
   prompt: Type.String({ minLength: 1, description: 'Guidance delivered after the current assistant turn and its tools finish.' }),
 });
 const Inspect = Type.Object({
-  id: Type.Optional(Type.String({ minLength: 1, description: 'Exact subagent ID. Omit to list retained jobs; supply an ID to include its result.' })),
+  id: Type.Optional(Type.String({ minLength: 1, description: 'Exact subagent name (its ID). Omit to list retained jobs; supply a name to include its result.' })),
 });
 const Wait = Type.Object({
-  ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, uniqueItems: true, description: 'Exact IDs of the subagents to wait for. Waits for all selected jobs.' }),
+  ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, uniqueItems: true, description: 'Exact kebab-case names assigned at launch (agent IDs). Waits for all selected jobs.' }),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1, maximum: 2_147_483_647, description: 'Optional maximum wait in milliseconds. A timeout returns current snapshots without stopping children. Omit to wait until all reports are ready.' })),
+});
+const Discard = Type.Object({
+  ids: Type.Array(Type.String({ minLength: 1 }), { minItems: 1, uniqueItems: true, description: 'Exact kebab-case names (agent IDs) of finished subagents whose reports have been reviewed and are no longer needed.' }),
 });
 const NullableString = Type.Union([Type.String(), Type.Null()]);
 const Snapshot = Type.Object({
@@ -49,7 +56,7 @@ const Snapshot = Type.Object({
   error: NullableString, notificationError: NullableString,
   result: NullableString, fullOutputPath: NullableString,
 });
-const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status', 'subagents_wait']);
+const OWN_TOOLS = new Set(['subagents_launch', 'subagents_steer', 'subagents_status', 'subagents_wait', 'subagents_discard']);
 const DEFAULT_PROMPT = 'You are a general-purpose subagent. Complete the assigned task and return a clear, concise report to the parent agent. You share its working directory; coordinate file changes carefully.';
 const WIDGET = 'subagents.pi';
 const FRAMES = ['·', '✢', '✳', '✶', '✻', '✽', '✻', '✶', '✳', '✢'];
@@ -63,7 +70,11 @@ type ToolProgress = {
 };
 interface Job {
   id: string;
-  agent: Agent;
+  agent?: Agent; // Released as soon as execution and report preparation settle.
+  model: string;
+  provider: string;
+  stats?: string;
+  discarded?: boolean;
   prompt: string;
   cwd: string;
   status: Status;
@@ -95,7 +106,7 @@ interface DashboardActions {
 function active(job: Job) { return job.status === 'running' || job.status === 'stopping'; }
 function snapshot(job: Job, includeResult = false): Static<typeof Snapshot> {
   return {
-    id: job.id, prompt: job.prompt, model: job.agent.state.model.id, provider: job.agent.state.model.provider,
+    id: job.id, prompt: job.prompt, model: job.model, provider: job.provider,
     status: job.status, activity: job.activity, pendingSteers: job.pendingSteers,
     elapsedMs: Math.max(0, (job.finishedAt ?? Date.now()) - job.startedAt),
     notification: job.notification, error: job.error ?? null, notificationError: job.notificationError ?? null,
@@ -124,14 +135,14 @@ function columns(left: string, right: string, width: number) {
   return clipped + ' '.repeat(width - visibleWidth(clipped) - visibleWidth(right)) + right;
 }
 function jobLine(job: Job, theme: Theme, width: number, selected = false) {
-  const prompt = oneLine(job.prompt);
-  const title = theme.fg(selected ? 'accent' : 'text', selected ? theme.bold(prompt) : prompt);
+  const title = theme.fg(selected ? 'accent' : 'text', selected ? theme.bold(job.id) : job.id);
   return columns(`${badge(job, theme)} ${title}`, theme.fg(statusColor(job), job.status) + theme.fg('dim', ` · ${elapsed(job)}`), width);
 }
 function jobStats(job: Job) {
   // Provider-reported finalized usage only; partial snapshots are not additive.
-  const tokens = job.agent.state.messages.reduce((total, message) => message.role === 'assistant'
-    ? total + (Number.isFinite(message.usage.totalTokens) ? Math.max(0, message.usage.totalTokens) : 0) : total, 0);
+  if (job.stats !== undefined) return job.stats;
+  const tokens = job.agent?.state.messages.reduce((total, message) => message.role === 'assistant'
+    ? total + (Number.isFinite(message.usage.totalTokens) ? Math.max(0, message.usage.totalTokens) : 0) : total, 0) ?? 0;
   const count = job.tools.size;
   return `${count} tool ${count === 1 ? 'use' : 'uses'}${tokens ? ` · ${TOKEN_FORMAT.format(tokens)} tokens` : ''}`;
 }
@@ -139,7 +150,7 @@ function jobDetail(job: Job, theme: Theme, width: number) {
   const activity = `${width < 60 ? `${job.status} · ` : ''}${oneLine(job.activity)}`;
   const queued = job.pendingSteers ? theme.fg('warning', ` · ${job.pendingSteers} steering queued`) : '';
   return columns(theme.fg('muted', activity) + queued,
-    theme.fg('dim', `${oneLine(job.agent.state.model.id)} · ${jobStats(job)}`), width);
+    theme.fg('dim', `${oneLine(job.model)} · ${jobStats(job)}`), width);
 }
 function panelLine(text: string, width: number, theme: Theme, background: Parameters<Theme['bg']>[0]) {
   // Truncation inserts full resets around its ellipsis. Reapply the surface after
@@ -189,7 +200,7 @@ class SubagentDashboard implements Component, Focusable {
   private toolComponents = new Map<string, { component: ToolExecutionComponent; revision: number; expanded?: boolean }>();
   private cacheKey = '';
   private currentId?: string;
-  private viewedJob?: Job; // Pin the visible transcript even if bounded history evicts it.
+  private viewedJob?: Job; // Pin the visible report if bounded history evicts it; explicit discard unpins it.
   private lastStreaming?: AgentMessage;
   private partial?: { index: number; component: AssistantMessageComponent };
   private drafts = new Map<string, string>();
@@ -204,6 +215,8 @@ class SubagentDashboard implements Component, Focusable {
   private transcriptHeight = 0;
   private editorBounds?: { top: number; height: number; offset: number; fullHeight: number };
   private contentTop = 0;
+  private renderedWidth = 0;
+  private renderedHeight = 0;
 
   private tui: TUI;
   private ctx: ExtensionContext;
@@ -211,7 +224,7 @@ class SubagentDashboard implements Component, Focusable {
   private actions: DashboardActions;
   private done: () => void;
 
-  constructor(tui: TUI, ctx: ExtensionContext, kb: KeybindingsManager, actions: DashboardActions, done: () => void, id?: string) {
+  constructor(tui: TUI, ctx: ExtensionContext, kb: KeybindingsManager, actions: DashboardActions, done: () => void) {
     this.tui = tui;
     this.ctx = ctx;
     this.kb = kb;
@@ -236,11 +249,25 @@ class SubagentDashboard implements Component, Focusable {
       } catch (error) { this.notice = String(error); }
       this.tui.requestRender();
     };
-    if (id) {
-      this.selected = Math.max(0, actions.jobs().findIndex((job) => job.id === id));
-      this.open();
-    }
-    this.unsubscribe = actions.subscribe(() => tui.requestRender());
+    this.unsubscribe = actions.subscribe(() => {
+      // Native render components also retain messages/tool results. Release those
+      // references immediately, even when this overlay is hidden or on the list.
+      if (this.currentId && !actions.jobs().find(job => job.id === this.currentId)?.agent) {
+        this.clearTranscript();
+        this.drafts.delete(this.currentId);
+        this.composing.setText('');
+      }
+      if (this.confirming?.discarded) this.confirming = undefined;
+      if (this.viewedJob?.discarded) {
+        this.viewedJob = undefined;
+        this.currentId = undefined;
+        this.viewing = false;
+        this.composing.focused = false;
+        this.notice = 'Finished subagent discarded.';
+      }
+      for (const id of this.drafts.keys()) if (!actions.jobs().some(job => job.id === id && active(job))) this.drafts.delete(id);
+      tui.requestRender();
+    });
   }
   private get theme() { return this.ctx.ui.theme; }
   private get job() { return this.viewing ? this.viewedJob : this.actions.jobs()[this.selected]; }
@@ -253,10 +280,7 @@ class SubagentDashboard implements Component, Focusable {
       if (this.currentId) this.drafts.set(this.currentId, this.composing.getExpandedText());
       this.currentId = this.job.id;
       this.composing.setText(this.drafts.get(this.currentId) ?? '');
-      this.messages.clear();
-      this.partial = undefined;
-      this.toolComponents.clear();
-      this.cacheKey = '';
+      this.clearTranscript();
       this.scroll.scrollToEnd();
     }
     this.viewedJob = this.job;
@@ -269,6 +293,10 @@ class SubagentDashboard implements Component, Focusable {
     if (key === this.cacheKey) return;
     this.cacheKey = key;
     this.transcript.clear();
+    if (!job.agent) {
+      this.transcript.addChild(new Text(job.result ?? '(No final report available.)', 0, 0));
+      return;
+    }
     const streaming = job.agent.state.streamingMessage;
     const messages = [...job.agent.state.messages, ...(streaming ? [streaming] : [])];
     const kept = new Set<AgentMessage>();
@@ -363,6 +391,8 @@ class SubagentDashboard implements Component, Focusable {
   }
   handleMouse(event: TuiMouseEvent) {
     if (this.closed) return undefined;
+    if (event.x < 1 || event.x >= this.renderedWidth - 1 || event.y < 1 || event.y >= this.renderedHeight - 1) return { handled: true };
+    event = { ...event, x: event.x - 1, y: event.y - 1, width: Math.max(0, event.width - 2), height: Math.max(0, event.height - 2) };
     if (this.confirming) return { handled: true };
     if (event.type === 'wheel' && this.viewing) {
       this.scroll.scrollBy(event.wheelDelta ?? 0);
@@ -389,13 +419,30 @@ class SubagentDashboard implements Component, Focusable {
     return undefined;
   }
   render(width: number): string[] {
+    width = Math.max(0, width);
+    const rows = this.tui.terminal.rows;
+    const height = Math.max(0, rows - (rows < 10 ? 2 : 4));
+    this.renderedWidth = width;
+    const border = (text: string) => this.theme.fg(this.confirming ? 'warning' : 'accent', text);
+    if (width < 2 || height < 3) {
+      const lines = Array.from({ length: Math.min(height, 2) }, () => border('─'.repeat(width)));
+      this.renderedHeight = lines.length;
+      return lines;
+    }
+    const inner = width - 2;
+    const lines = [border(`╭${'─'.repeat(inner)}╮`),
+      ...this.renderContent(inner, height - 2).map(line => border('│') + truncateToWidth(line, inner, '', true) + border('│')),
+      border(`╰${'─'.repeat(inner)}╯`)];
+    this.renderedHeight = lines.length;
+    return lines;
+  }
+  private renderContent(width: number, height: number): string[] {
     const theme = this.theme;
     const jobs = this.actions.jobs();
     this.selected = Math.min(this.selected, Math.max(0, jobs.length - 1));
     const job = this.job;
-    const height = Math.max(4, this.tui.terminal.rows - 4);
-    // Flat task-list chrome inspired by Claude Code. Keep native content at column
-    // zero and retain two-line rows so transcript/editor mouse coordinates stay exact.
+    // Flat task-list content inside a clearly defined outer frame. Mouse input
+    // is translated to this interior coordinate system in handleMouse.
     const rule = () => theme.fg('borderMuted', '─'.repeat(Math.max(0, width)));
     const key = (text: string) => theme.fg('accent', text);
     const separator = theme.fg('borderMuted', ' · ');
@@ -405,7 +452,7 @@ class SubagentDashboard implements Component, Focusable {
       this.bodyHeight = 0;
       // A dedicated compact screen keeps the destructive-action controls visible, even at eight rows.
       return [
-        theme.fg('warning', theme.bold(` Stop ${this.confirming.id.slice(0, 8)}?`)),
+        theme.fg('warning', theme.bold(` Stop ${this.confirming.id}?`)),
         theme.fg('warning', ' y stop · n / Esc cancel'),
         theme.fg('text', ` ${oneLine(this.confirming.prompt)}`),
         theme.fg('muted', ' Cannot undo tool side effects.'),
@@ -413,11 +460,11 @@ class SubagentDashboard implements Component, Focusable {
     }
     const compact = height < 8;
     const running = jobs.filter(active).length;
-    const title = this.viewing && job ? columns(` ${theme.fg('dim', 'Subagents /')} ${theme.bold(oneLine(job.prompt))}`,
+    const title = this.viewing && job ? columns(` ${theme.fg('dim', 'Subagents /')} ${theme.bold(job.id)}`,
       `${badge(job, theme)} ${theme.fg(statusColor(job), job.status)}${theme.fg('dim', ` · ${elapsed(job)}`)}`, width)
       : ` ${theme.fg('accent', theme.bold('Subagents'))}  ${theme.fg(running ? 'accent' : 'muted', `${running} running`)}${separator}${theme.fg('muted', `${jobs.length - running} finished`)}`;
     const subtitle = this.viewing && job
-      ? ` ${width < 60 ? `${job.status} · ` : ''}${oneLine(job.agent.state.model.provider)}/${oneLine(job.agent.state.model.id)} · ${jobStats(job)} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''} · ${job.id.slice(0, 8)}`
+      ? ` ${width < 60 ? `${job.status} · ` : ''}${oneLine(job.provider)}/${oneLine(job.model)} · ${jobStats(job)} · ${oneLine(job.activity)}${job.pendingSteers ? ` · ${job.pendingSteers} steering queued` : ''}`
       : ' Background tasks · select an agent to view its output or send guidance';
     const lines = compact ? [title] : [title, theme.fg('dim', subtitle), rule()];
     this.bodyTop = lines.length;
@@ -440,7 +487,7 @@ class SubagentDashboard implements Component, Focusable {
     const footer = theme.fg('muted', compact
       ? this.viewing ? ` ${controls}${key('Esc')} list`
         : ` ${key('Enter')} view · ${key('x')} stop · ${key('Esc')} parent`
-      : this.viewing ? ` ${controls}${key('PgUp/PgDn')} scroll · ${key('Ctrl+O')} tools · ${key('Ctrl+T')} thinking · ${key('Esc')} list`
+      : this.viewing ? ` ${controls}${key('PgUp/PgDn')} scroll · ${job?.agent ? `${key('Ctrl+O')} tools · ${key('Ctrl+T')} thinking · ` : ''}${key('Esc')} list`
         : ` ${key('↑↓')} select · ${key('Enter')} view · ${key('s')} steer · ${key('x')} stop · ${key('Esc')} parent`);
     this.bodyHeight = Math.max(0, height - lines.length - editor.length - (compact ? 1 : 3));
     if (this.viewing && job) {
@@ -466,12 +513,23 @@ class SubagentDashboard implements Component, Focusable {
       lines.splice(this.bodyTop + this.bodyHeight);
       while (lines.length < this.bodyTop + this.bodyHeight) lines.push('');
     }
-    const note = this.notice || (this.viewing && job ? `${job.error || ''}${this.scroll.isFollowingEnd ? active(job) ? '  Following live output' : '  End of transcript' : '  Scroll paused · Ctrl+End follows live output'}`
-      : jobs.length ? `Agent ${this.selected + 1} of ${jobs.length} · ${job ? jobStats(job) : ''} · latest 20 finished retained` : 'No background work · your parent session is still active');
+    const note = this.notice || (this.viewing && job ? `${job.error || ''}${this.scroll.isFollowingEnd ? active(job) ? '  Following live output' : job.agent ? '  End of transcript · preparing report' : '  End of report · full agent state released' : '  Scroll paused · Ctrl+End follows live output'}`
+      : jobs.length ? `Agent ${this.selected + 1} of ${jobs.length} · ${job ? jobStats(job) : ''} · latest 20 reports retained` : 'No background work · your parent session is still active');
     if (editor.length) this.editorBounds = { top: lines.length, height: editor.length, offset: editorOffset, fullHeight: editorFullHeight };
     const noteColor = this.viewing && job?.error ? 'error' : this.notice ? 'accent' : 'muted';
     lines.push(...editor, ...(compact ? [footer] : [rule(), theme.fg(noteColor, ` ${oneLine(note)}`), footer]));
     return lines.slice(0, height).map((line) => truncateToWidth(line, width));
+  }
+  private clearTranscript() {
+    this.cacheKey = '';
+    this.messages.clear();
+    this.toolComponents.clear();
+    this.transcript.clear();
+    // Pi 1.3 Container.clear() leaves mouseLayout pointing at rendered children.
+    // An empty render drops those references without touching private TUI fields.
+    this.transcript.render(0);
+    this.partial = undefined;
+    this.lastStreaming = undefined;
   }
   invalidate() {
     this.cacheKey = '';
@@ -481,11 +539,21 @@ class SubagentDashboard implements Component, Focusable {
     this.transcript.invalidate();
     this.composing.invalidate();
   }
-  dispose() { this.closed = true; this.unsubscribe(); }
+  dispose() {
+    this.closed = true;
+    this.unsubscribe();
+    this.clearTranscript();
+    this.viewedJob = undefined;
+    this.confirming = undefined;
+    this.drafts.clear();
+    this.composing.setText('');
+  }
 }
 
 export default function subagentsExtension(pi: ExtensionAPI) {
   const jobs = new Map<string, Job>();
+  // Reserve only names, not job state: stale references must never target a new child.
+  const usedNames = new Set<string>();
   const listeners = new Set<() => void>();
   let finishedOrder = 0;
   let uiContext: ExtensionContext | undefined;
@@ -508,13 +576,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   }
   function steer(job: Job, prompt: string) {
     if (!prompt.trim()) throw new Error('Steering prompt must not be blank.');
-    if (jobs.get(job.id) !== job || job.cancelled || job.status !== 'running') throw new Error(`Subagent is not running: ${job.id}`);
+    if (jobs.get(job.id) !== job || job.cancelled || job.status !== 'running' || !job.agent) throw new Error(`Subagent is not running: ${job.id}`);
     job.pendingSteers++;
     job.agent.steer({ role: 'user', content: prompt, timestamp: Date.now() });
     refresh();
   }
   function stop(job: Job) {
-    if (jobs.get(job.id) !== job || job.status !== 'running') return;
+    if (jobs.get(job.id) !== job || job.status !== 'running' || !job.agent) return;
     job.status = 'stopping';
     job.activity = 'Stopping — waiting for cancellation';
     job.agent.clearAllQueues();
@@ -522,13 +590,13 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     job.agent.abort();
     refresh();
   }
-  async function dashboard(ctx: ExtensionContext, id?: string) {
+  async function dashboard(ctx: ExtensionContext) {
     if (ctx.mode !== 'tui') { ctx.ui.notify('The subagent dashboard requires interactive TUI mode.', 'warning'); return; }
     if (closeDashboard) { ctx.ui.notify('The subagent dashboard is already open.', 'info'); return; }
     attachUI(ctx);
     await ctx.ui.custom<void>((tui, _theme, kb, done) => {
       closeDashboard = () => done();
-      return new SubagentDashboard(tui, ctx, kb, { jobs: () => [...jobs.values()], steer, stop, subscribe }, done, id);
+      return new SubagentDashboard(tui, ctx, kb, { jobs: () => [...jobs.values()], steer, stop, subscribe }, done);
     }, { overlay: true, overlayOptions: { width: '96%', maxHeight: '100%', anchor: 'center' } }).finally(() => { closeDashboard = undefined; });
   }
   function attachUI(ctx: ExtensionContext) {
@@ -552,11 +620,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
             + theme.fg('muted', ` · ${all.length - running.length} finished`)
             + (failed ? theme.fg('error', ` · ${failed} failed`) : '');
           return [
-            columns(heading, theme.fg('dim', 'Ctrl+Shift+A to manage'), width),
+            columns(heading, theme.fg('dim', 'Click to view'), width),
             ...running.slice(0, 4).map((job) => columns(
-              theme.fg('dim', '  ⎿ ') + theme.fg('text', oneLine(job.prompt)),
+              theme.fg('dim', '  ⎿ ') + theme.fg('text', job.id),
               theme.fg('muted', `${oneLine(job.activity)} · ${elapsed(job)}`), width)),
-            ...(running.length > 4 ? [theme.fg('dim', `  ⎿ +${running.length - 4} more · /subagents`)] : []),
+            ...(running.length > 4 ? [theme.fg('dim', `  ⎿ +${running.length - 4} more`)] : []),
           ].map((line) => truncateToWidth(line, width));
         },
         handleMouse(event) {
@@ -597,18 +665,19 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     for (const job of finished.slice(HISTORY_LIMIT)) jobs.delete(job.id);
   }
   async function run(job: Job) {
+    const agent = job.agent!;
     let response = '';
     let error: string | undefined;
     try {
-      await job.agent.prompt(job.prompt);
-      while (!job.cancelled && job.status === 'running' && job.agent.hasQueuedMessages()) {
-        const outcome = job.agent.state.messages.findLast((message) => message.role === 'assistant');
+      await agent.prompt(job.prompt);
+      while (!job.cancelled && job.status === 'running' && agent.hasQueuedMessages()) {
+        const outcome = agent.state.messages.findLast((message) => message.role === 'assistant');
         // Error/abort are hard exits in Agent; queued steering must not implicitly restart them.
         if (outcome?.role === 'assistant' && (outcome.stopReason === 'error' || outcome.stopReason === 'aborted')) break;
-        await job.agent.continue();
+        await agent.continue();
       }
-      job.agent.clearAllQueues();
-      const last = job.agent.state.messages.findLast((message) => message.role === 'assistant');
+      agent.clearAllQueues();
+      const last = agent.state.messages.findLast((message) => message.role === 'assistant');
       if (last?.role === 'assistant') {
         response = last.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
         if (last.stopReason === 'error' || last.stopReason === 'aborted') error = last.errorMessage || `Subagent ${last.stopReason}`;
@@ -643,8 +712,8 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     // followUp waits for the parent to stop calling tools, starving useful results
     // during long tasks. steer is drained at a safe boundary after the current tools.
     pi.sendMessage({ customType: WIDGET, content, display: true,
-      details: { id: job.id, status: job.status, prompt: job.prompt, model: job.agent.state.model.id,
-        provider: job.agent.state.model.provider, fullOutputPath } },
+      details: { id: job.id, status: job.status, prompt: job.prompt, model: job.model,
+        provider: job.provider, fullOutputPath } },
     { triggerTurn: true, deliverAs: 'steer' });
     job.notification = 'queued';
   }
@@ -676,11 +745,12 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   async function cleanup() {
     const pending = [...jobs.values()];
     jobs.clear(); // Do not accidentally clear newly launched jobs after awaiting old cancellations.
+    usedNames.clear();
     closeDashboard?.();
     if (timer) { clearInterval(timer); timer = undefined; }
     uiContext?.ui.setWidget(WIDGET, undefined);
     uiContext = undefined;
-    for (const job of pending) { job.cancelled = true; job.unsubscribe?.(); job.agent.clearAllQueues(); job.agent.abort(); }
+    for (const job of pending) { job.cancelled = true; job.unsubscribe?.(); job.agent?.clearAllQueues(); job.agent?.abort(); }
     refresh(); // Release waits immediately, even when a child tool ignores cancellation.
     await Promise.allSettled(pending.map((job) => job.done));
   }
@@ -688,20 +758,11 @@ export default function subagentsExtension(pi: ExtensionAPI) {
   pi.on('session_start', cleanup);
   pi.on('session_tree', cleanup);
 
-  pi.registerCommand('subagents', {
-    description: 'Live subagents dashboard: view transcripts, steer, and stop. Optional agent ID prefix.',
-    async handler(args, ctx) {
-      const prefix = args.trim();
-      const matches = prefix ? [...jobs.keys()].filter((id) => id.startsWith(prefix)) : [];
-      if (prefix && matches.length !== 1) { ctx.ui.notify(matches.length ? 'Ambiguous subagent ID prefix.' : 'No matching subagent in this session.', 'warning'); return; }
-      await dashboard(ctx, matches[0]);
-    },
-  });
-  pi.registerShortcut('ctrl+shift+a', { description: 'Open live subagent dashboard', handler: (ctx) => dashboard(ctx) });
   pi.registerTool({
     name: 'subagents_launch', label: 'Launch subagents',
-    description: 'Delegate substantial, well-bounded tasks to background subagents only when parallel progress, context isolation, or independent verification clearly outweighs startup and coordination overhead. Work directly by default; independence alone is not enough. Returns IDs and metadata immediately, not answers. Children have isolated history and share the parent workspace and callable tools. Reports arrive automatically at a safe parent turn boundary or resume an idle parent. No polling needed.',
+    description: 'Delegate substantial, well-bounded tasks to background subagents only when parallel progress, context isolation, or independent verification clearly outweighs startup and coordination overhead. Work directly by default; independence alone is not enough. Give each task a meaningful short kebab-case name; that name is its ID. Returns IDs and metadata immediately, not answers. Children have isolated history and share the parent workspace and callable tools. Reports arrive automatically at a safe parent turn boundary or resume an idle parent. No polling needed.',
     promptGuidelines: [
+      'Give every subagent a meaningful short kebab-case name, such as review-parser or write-tests. The name is the exact agent ID for steer/status/wait/discard and its UI label. Names must be unique in this session, even after discard; use a fresh name for a new task.',
       'Work directly by default. Use subagents_launch only for substantial, well-bounded tasks where parallel progress, context isolation, or independent verification clearly outweighs delegation overhead, or when the user explicitly requests subagents. Independence alone is not enough.',
       'Keep routine searches, a few file reads, small edits, ordinary test commands, and tightly coupled planning/implementation/testing in the parent. Use parallel tool calls for simple concurrency, not separate agents.',
       'Keep the immediate critical path local. Do not launch a child just to immediately wait unless context isolation or independent verification justifies the handoff. For parallel work, identify useful non-overlapping work the parent can continue.',
@@ -711,28 +772,52 @@ export default function subagentsExtension(pi: ExtensionAPI) {
       'Coordinate shared-file edits to avoid conflicts. Use subagents_steer to redirect a running child. If it has finished, steering returns its result without restarting it.',
       'Use subagents_status to inspect progress or recover a retained result when needed, not in a polling loop. Do not declare delegated work complete until you have checked its result.',
       'Use subagents_wait with one or more exact IDs when the next step depends on their results. It blocks until all selected reports are ready; failures and manual stops also finish a wait. Check each returned status before continuing.',
+      'After reviewing and integrating a finished subagent report, call subagents_discard with its exact ID when it is no longer needed. This releases retained reports; never discard unread results or jobs needed by another pending operation. Full child agent state is released automatically on completion.',
     ],
     parameters: Launch,
     outputSchema: Type.Object({ ids: Type.Array(Type.String()), agents: Type.Array(Snapshot) }),
     async execute(_callId, params, signal, _onUpdate, ctx) {
       signal?.throwIfAborted();
       if (!params.tasks.length) throw new Error('At least one subagent task is required.');
+      const batchNames = new Set<string>();
+      for (const task of params.tasks) {
+        if (typeof task.name !== 'string' || task.name.length > NAME_MAX_LENGTH || task.name.trim() !== task.name || !new RegExp(NAME_PATTERN).test(task.name)) {
+          throw new Error(`Subagent name must be 1–${NAME_MAX_LENGTH} characters in lowercase kebab-case, starting with a letter (e.g. review-parser).`);
+        }
+        if (batchNames.has(task.name) || usedNames.has(task.name)) throw new Error(`Subagent name already used in this session or batch: ${task.name}`);
+        batchNames.add(task.name);
+      }
       const activeTools = new Set(pi.getActiveTools());
       const defaultTools = ctx.tools.filter((tool) => activeTools.has(tool.name) && !OWN_TOOLS.has(tool.name)).map((tool) => tool.name);
-      const prepared: Job[] = params.tasks.map((task) => ({
-        id: randomUUID(), agent: prepare(task, ctx, ctx.thinkingLevel ?? pi.getThinkingLevel(), defaultTools),
-        prompt: task.prompt, cwd: ctx.cwd, cancelled: false, status: 'running', startedAt: Date.now(),
-        activity: 'Starting', revision: 0, pendingSteers: 0, tools: new Map(), notification: 'pending',
-      }));
+      const prepared: Job[] = params.tasks.map((task) => {
+        const agent = prepare(task, ctx, ctx.thinkingLevel ?? pi.getThinkingLevel(), defaultTools);
+        return {
+          id: task.name, agent, model: agent.state.model.id, provider: agent.state.model.provider,
+          prompt: task.prompt, cwd: ctx.cwd, cancelled: false, status: 'running', startedAt: Date.now(),
+          activity: 'Starting', revision: 0, pendingSteers: 0, tools: new Map(), notification: 'pending',
+        };
+      });
       attachUI(ctx);
+      for (const job of prepared) usedNames.add(job.id);
       for (const job of prepared) {
         jobs.set(job.id, job);
-        job.unsubscribe = job.agent.subscribe((event) => progress(job, event));
+        job.unsubscribe = job.agent!.subscribe((event) => progress(job, event));
         job.done = run(job).catch((error) => {
           job.notification = 'failed';
           job.notificationError = error instanceof Error ? error.message : String(error);
           console.error(`subagents.pi: could not deliver ${job.id}:`, error);
-        }).finally(() => { job.settled = true; job.unsubscribe?.(); prune(); refresh(); });
+        }).finally(() => {
+          job.stats = jobStats(job);
+          job.unsubscribe?.();
+          job.unsubscribe = undefined;
+          job.agent = undefined;
+          job.tools.clear();
+          job.done = undefined;
+          job.settled = true;
+          job.revision++;
+          prune();
+          refresh();
+        });
       }
       refresh();
       const ids = prepared.map((job) => job.id);
@@ -795,8 +880,34 @@ export default function subagentsExtension(pi: ExtensionAPI) {
     },
   });
   pi.registerTool({
+    name: 'subagents_discard', label: 'Discard finished subagents',
+    description: 'Discard retained reports for finished subagents after reviewing and integrating their results. Requires exact IDs; the entire batch must have finished execution and report preparation. Does not stop running children, retract queued notifications, delete parent transcript messages, or delete report files. Discarded IDs are no longer queryable.',
+    parameters: Discard,
+    outputSchema: Type.Object({ ids: Type.Array(Type.String()) }),
+    annotations: { destructiveHint: true, idempotentHint: false, openWorldHint: false },
+    async execute(_callId, params, signal) {
+      signal?.throwIfAborted();
+      if (!params.ids.length) throw new Error('At least one subagent ID is required.');
+      if (new Set(params.ids).size !== params.ids.length) throw new Error('Subagent IDs must be unique.');
+      // Validate atomically. A queued notification is not a read acknowledgement;
+      // the caller decides whether the report is still needed.
+      const selected = params.ids.map(id => {
+        const job = jobs.get(id);
+        if (!job) throw new Error(`Unknown or no longer retained subagent: ${id}`);
+        if (!job.settled || active(job)) throw new Error(`Subagent has not finished execution and report preparation: ${id}`);
+        return job;
+      });
+      for (const job of selected) { job.discarded = true; jobs.delete(job.id); }
+      refresh();
+      return {
+        content: [{ type: 'text', text: `Discarded finished subagents: ${params.ids.join(', ')}.` }],
+        details: { ids: params.ids }, structuredContent: { ids: params.ids },
+      };
+    },
+  });
+  pi.registerTool({
     name: 'subagents_status', label: 'Subagent status',
-    description: 'Inspect background subagent progress without waiting or making model calls. Omit id to list retained jobs; supply an exact ID to recover its available result. Reports are delivered automatically; use this for diagnostics, not polling. History is limited to this runtime and the latest 20 finished jobs.',
+    description: 'Inspect background subagent progress without waiting or making model calls. Omit id to list retained jobs; supply an exact ID to recover its available result. Reports are delivered automatically; use this for diagnostics, not polling. Full child agent state is released on completion; at most 20 finished reports remain in this runtime until discarded.',
     parameters: Inspect,
     outputSchema: Type.Object({ agents: Type.Array(Snapshot) }),
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },

@@ -26,6 +26,7 @@ These are **model-facing guidelines, not runtime limits**. Explicit launches sti
 | `subagents_steer({ id, prompt })` | Queue guidance for a running child, or recover the result if it has already finished. |
 | `subagents_status({ id? })` | Inspect progress without waiting; an exact ID includes the available final report. |
 | `subagents_wait({ ids, timeoutMs? })` | Wait for all selected children and return their reports; an optional timeout returns current snapshots without stopping them. |
+| `subagents_discard({ ids })` | Release retained finished reports after reviewing and integrating them. |
 
 Completion reports arrive automatically. **Do not poll status in a loop.** Use status to diagnose a job or recover a report; use wait when the next step depends on one or more children's results.
 
@@ -35,11 +36,13 @@ Completion reports arrive automatically. **Do not poll status in a loop.** Use s
 {
   "tasks": [
     {
+      "name": "review-parser",
       "prompt": "Review src/parser.ts for edge cases. Do not edit files; report findings with file paths.",
       "thinkingLevel": "high",
       "tools": ["read", "bash"]
     },
     {
+      "name": "write-tests",
       "prompt": "Write parser regression tests. Own only tests/parser.test.ts; do not edit implementation files. Run the tests and report results."
     }
   ]
@@ -50,6 +53,7 @@ Each task supports:
 
 | Field | Default / behavior |
 | --- | --- |
+| `name` | Required short, meaningful kebab-case name, e.g. `review-parser`. This is the agent identifier shown in the UI and used by every tool. 1–48 characters; lowercase ASCII letters/digits with single hyphens between segments, starting with a letter. Must be unique in the session, even after discard or history eviction. |
 | `prompt` | Required, nonblank, self-contained task. |
 | `model` | Parent model ID. Must resolve with the selected provider. |
 | `provider` | Parent provider. |
@@ -57,7 +61,13 @@ Each task supports:
 | `tools` | Active parent-callable tools, excluding this extension's orchestration tools. Supply exact names to choose a subset; `[]` disables tools. Explicit tools must be callable in the parent's context. |
 | `systemPrompt` | General-purpose subagent instructions. A supplied value replaces these instructions; an explicit empty string is respected. |
 
-The entire batch is validated before any child starts. Children then run concurrently with separate IDs and Agent instances. There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
+The entire batch is validated before any child starts, including missing/invalid names and duplicate names within the batch or session. A rejected batch reserves no names. Children then run concurrently with separate names and Agent instances.
+
+**Names are IDs, not aliases.** Pass `"review-parser"` in the `id` field of steer/status and in the `ids` arrays of wait/discard. Launch results and completion reports use that same name unchanged; there is no public UUID or prefix lookup. Use a new name (such as `review-parser-followup`) for subsequent work. Internal provider session IDs remain separate.
+
+Names stay reserved until session cleanup so stale tool calls or queued notifications cannot be confused with a different child. Only the short name strings are reserved—not the discarded jobs, prompts, or reports.
+
+There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
 
 A child does **not** inherit the parent conversation, parent system prompt, or project instructions automatically. Include the task context, relevant file paths, constraints, expected output, and any required instructions in its prompt. File ownership should be explicit when children can edit the same workspace.
 
@@ -67,10 +77,10 @@ Child tools call `ctx.executeTool()` so Pi's validation, permission hooks, and t
 
 ```json
 {
-  "ids": ["<uuid-1>", "<uuid-2>"],
+  "ids": ["review-parser", "write-tests"],
   "agents": [
     {
-      "id": "<uuid-1>",
+      "id": "review-parser",
       "prompt": "Review src/parser.ts for edge cases...",
       "model": "<selected-model>",
       "provider": "<selected-provider>",
@@ -88,7 +98,7 @@ Child tools call `ctx.executeTool()` so Pi's validation, permission hooks, and t
 }
 ```
 
-This abbreviated example illustrates one snapshot; the actual `agents` array contains one entry per launched ID. State can advance before the launch returns. Legacy tool-result `details.ids` remains available. Codemode receives the structured object rather than needing to parse a sentence containing UUIDs.
+This abbreviated example illustrates one snapshot; the actual `agents` array contains one entry per launched ID. State can advance before the launch returns. Legacy tool-result `details.ids` remains available. Codemode receives the structured object rather than needing to parse a sentence containing agent names.
 
 ## Completion delivery and steering
 
@@ -106,7 +116,7 @@ This fixes the previous follow-up behavior: reports could wait behind a long-run
 Guidance to a child follows the same safe-boundary principle:
 
 ```json
-{ "id": "<exact-child-id>", "prompt": "Focus on malformed input. Do not change the public API." }
+{ "id": "review-parser", "prompt": "Focus on malformed input. Do not change the public API." }
 ```
 
 The result is `{ "accepted": true, "agent": { ...snapshot } }` when queued. It does not interrupt an in-flight tool.
@@ -120,7 +130,7 @@ Provider errors and aborts are hard exits; queued guidance cannot restart a fail
 Use `subagents_wait` to hold the parent's tool call until **all** selected children have finished and report preparation/enqueueing has settled:
 
 ```json
-{ "ids": ["<exact-child-id-1>", "<exact-child-id-2>"] }
+{ "ids": ["review-parser", "write-tests"] }
 ```
 
 The result is `{ "timedOut": false, "agents": [ ...snapshotsWithResults ] }`, in the requested ID order. A failed or manually stopped child also finishes a wait: **check each `status` and `error`**, not just `timedOut`, before proceeding. Already-finished children return immediately. Unselected children continue independently.
@@ -128,7 +138,7 @@ The result is `{ "timedOut": false, "agents": [ ...snapshotsWithResults ] }`, in
 An optional deadline bounds only this wait, not the children:
 
 ```json
-{ "ids": ["<exact-child-id>"], "timeoutMs": 60000 }
+{ "ids": ["review-parser"], "timeoutMs": 60000 }
 ```
 
 If it expires, the tool returns `timedOut: true` and current snapshots, including any reports already available. Omitting `timeoutMs` waits without a deadline; valid values are integers from 1 to 2147483647 milliseconds. Cancelling the parent wait does **not** stop the children. A session change/shutdown cancels pending waits and children according to the lifecycle rules below.
@@ -139,8 +149,8 @@ For a substantial review where separate assessments justify the handoff, waiting
 
 ```javascript
 const launched = await tools.subagents_launch({ tasks: [
-  { prompt: "Review src/parser.ts. Do not edit files; report edge cases." },
-  { prompt: "Review tests/parser.test.ts. Do not edit files; report coverage gaps." },
+  { name: "review-parser", prompt: "Review src/parser.ts. Do not edit files; report edge cases." },
+  { name: "review-tests", prompt: "Review tests/parser.test.ts. Do not edit files; report coverage gaps." },
 ] });
 const result = await tools.subagents_wait({ ids: launched.ids });
 text(result); // Inspect every child status and report before the dependent step.
@@ -155,10 +165,10 @@ text(result); // Inspect every child status and report before the dependent step
 Lists retained jobs with activity, model/provider, elapsed time, queued-guidance count, status, and notification state. The list intentionally omits final report bodies.
 
 ```json
-{ "id": "<exact-child-id>" }
+{ "id": "review-parser" }
 ```
 
-Returns one snapshot with its available final report. Inspection never waits for a running child and makes no model/API call. IDs for tools must be exact; the dashboard command additionally accepts unique prefixes.
+Returns one snapshot with its available final report. Inspection never waits for a running child and makes no model/API call. IDs for tools must be exact kebab-case names; prefixes and aliases are not accepted.
 
 Snapshot states:
 
@@ -172,19 +182,33 @@ Snapshot states:
 
 A completed child's report can already be inspected while its large-output file is still being written. The interim report states that the file is being prepared. Inspection does not consume, resend, or duplicate the automatic notification.
 
+## Discarding finished subagents
+
+After reviewing and integrating a report, the parent should release it when it is no longer needed:
+
+```json
+{ "ids": ["review-parser"] }
+```
+
+Call **`subagents_discard`** with exact, unique IDs. The whole batch is validated before anything is removed: running/stopping jobs, pending report preparation, unknown IDs, duplicates, and cancelled calls are rejected. Failed or stopped children can be discarded once report preparation settles, including reports recovered after notification failure.
+
+Discarding removes the jobs from the dashboard, widget, and status/steering/wait lookup. An already-running wait retains its selected reports until it returns; future calls with discarded IDs fail. A dashboard displaying an explicitly discarded report returns to the list. Discard does **not** retract queued notifications, erase parent transcript messages, or delete full-response files that delivered messages may still reference.
+
+Queueing a report does not prove that the parent has read it. Therefore reports are not automatically discarded on enqueue: the parent decides when they are no longer needed. The launch tool includes guidance to discard reviewed reports. If the parent does not do so, only the latest 20 settled reports remain as a bounded recovery fallback.
+
 ## Dashboard
 
-Open with **`/subagents`**, **Ctrl+Shift+A**, or click the subagent widget. `/subagents <unique-ID-prefix>` opens a particular child.
+**Click the subagent widget** to open the dashboard. This is the only entry point: no command or opening keyboard shortcut is registered. The widget appears when there are running jobs or retained finished reports. Click a row inside the dashboard to open that child.
 
 The dashboard is an overlay; it does not switch parent sessions. Its presentation is heavily inspired by Claude Code's compact background-task UI, while retaining Pi's theme and native transcript components:
 
-- **Task-first rows:** assignment text takes priority over UUIDs, with lifecycle state and elapsed time aligned on the right when there is room.
-- **Quiet hierarchy:** flat headers, thin separators, a `›` selection pointer, and emphasized selected task text replace boxed panels and full-width selection backgrounds.
+- **Name-first rows:** each child's meaningful kebab-case name is its label and ID, with lifecycle state and elapsed time aligned on the right when there is room. Full task prompts do not appear in the list or parent widget; inspect a child to see its assignment.
+- **Clear outer frame, quiet interior:** a theme-accent rounded border surrounds both the dashboard and its stop-confirmation view (warning-colored for confirmation). Flat headers, thin separators, a `›` selection pointer, and emphasized task text keep the interior compact without full-width selection backgrounds. Mouse coordinates account for the frame; compact layouts keep it too.
 - **Indented activity:** `⎿` detail lines show what each child is doing, queued guidance, its model, tool-use count, and reported token usage where space permits.
-- **Compact parent widget:** an animated asterisk-style indicator, running/finished counts, up to four indented active tasks, and a management shortcut. Failed results remain explicitly marked when work finishes.
-- **Child detail view:** a `Subagents / task` breadcrumb, subdued metadata (including the short ID), native messages, thinking/tool blocks, live-follow state, and the existing steering editor. Finished children no longer advertise unavailable steering/stop actions.
+- **Compact parent widget:** an animated asterisk-style indicator, running/finished counts, up to four short active-agent names with activity/time, and a `Click to view` hint. No task prompts or opening keybinding hints. Failed results remain explicitly marked when work finishes.
+- **Child detail view:** a `Subagents / name` breadcrumb and subdued metadata, native messages, thinking/tool blocks, live-follow state, and the existing steering editor while running. Once execution and report preparation settle, the heavy transcript is released and the view shows only the bounded final report. Tool/token counters remain available; finished children no longer advertise unavailable steering/stop actions.
 
-Tool-use counts include started calls, including failed calls. Token totals sum provider-reported finalized assistant messages; live partial snapshots are not added, and zero/unknown totals are omitted. These are per-child UI metrics, not a new billing ledger or parent usage aggregation. Colors follow the current Pi theme rather than hardcoding Claude's palette. On narrow terminals, prompts/details are clipped safely and lower-priority metadata may be omitted.
+Tool-use counts include started calls, including failed calls. Token totals sum provider-reported finalized assistant messages; live partial snapshots are not added, and zero/unknown totals are omitted. These are per-child UI metrics, not a new billing ledger or parent usage aggregation. Colors follow the current Pi theme rather than hardcoding Claude's palette. On narrow terminals, names/details are clipped safely and lower-priority metadata may be omitted.
 
 | Action | Default key |
 | --- | --- |
@@ -199,7 +223,7 @@ Tool-use counts include started calls, including failed calls. Token totals sum 
 | Jump to top / resume following live output | Ctrl+Home / Ctrl+End |
 | Toggle thinking / expand tool output | Ctrl+T / Ctrl+O |
 
-Pi keybindings apply to navigation and toggle actions. Scrolling pauses live-follow; jumping to the end resumes it. The editor keeps separate drafts for viewed jobs. In **fullscreen mode**, click the widget to open the dashboard and click either line of a child entry to open its transcript/editor. Transcript blocks and the editor also support mouse interaction. Regular-mode rendering is supported, but Pi leaves mouse input to the terminal in that mode; use keyboard controls there.
+Pi keybindings apply to navigation and toggle actions. Scrolling pauses live-follow; jumping to the end resumes it. The editor keeps separate drafts for viewed jobs. In **fullscreen mode**, click the widget to open the dashboard and click either line of a child entry to open its transcript/editor. Transcript blocks and the editor also support mouse interaction. Pi routes mouse input in **fullscreen mode**, which this dotfiles configuration uses. Regular-mode Pi leaves mouse input to the terminal, so the dashboard cannot be opened there with this mouse-only entry point. Keyboard navigation, steering, scrolling, and closing still work inside an already-open dashboard.
 
 Stopping is available through the interactive dashboard; there is no model-callable stop tool. Cancellation cannot undo file changes, external requests, or charges already incurred. A tool that ignores its abort signal can delay stopping.
 
@@ -207,15 +231,17 @@ The tools also work in print, JSON, and RPC modes. The dashboard and animated wi
 
 ## Lifecycle, retention, and limits
 
-- Live jobs and transcripts exist only in this extension runtime. Running jobs plus the latest **20 settled jobs** are retained for inspection; in-flight report delivery is not prematurely evicted.
-- An already-open transcript remains visible even if the history limit evicts its job. That does not restore the job to the status/steering APIs.
+- Live jobs and transcripts exist only in this extension runtime. Once execution and report preparation settle (success, failure, or manual stop), the Agent reference, tool-result map, subscription closure, and completion-promise reference are released automatically. Dashboard transcript/render caches and unused drafts are also cleared. Memory becomes eligible for JavaScript garbage collection; an immediate drop in process RSS is not guaranteed.
+- Only report metadata, counters, and bounded final text remain for finished jobs. The parent can remove those with `subagents_discard`; at most the latest **20 settled reports** are kept otherwise. In-flight report preparation is not prematurely evicted.
+- The previous 20-job cap already prevented unlimited growth in finished-job count, but each retained Agent could hold a large, unbounded conversation and tool outputs. Releasing heavy state addresses that cost without depending on the parent remembering to discard reports. Finished agents make no further model calls; the widget animation timer stops when no jobs remain active.
+- An already-open **report** remains visible if the history limit evicts it (at most one extra pinned report). Explicit discard releases that view too. Neither restores an evicted/discarded job to the status/steering APIs.
 - Session start, session shutdown, tree navigation, and extension reload cancel old children, clear runtime history, close dashboards, and suppress notifications still being prepared for the old session. Notifications already handed to Pi follow Pi's session/queue lifecycle.
 - Parent tool-call cancellation after launch does not cancel children: background work intentionally outlives that call.
 - These are not detached workers: shutting down a one-shot Pi process cancels unfinished children. Keep the parent session/process alive when their results are required; use `subagents_wait` to explicitly hold the parent until dependencies finish. Otherwise the extension does not block parent completion.
 - Completed custom messages are stored in the parent's session transcript, but child Agent state is not persisted or resumed. After restart, read old completion messages from the session rather than querying old IDs.
 - Reports are truncated at Pi's default limits (**2,000 lines / 50 KiB**). Complete Markdown is saved to a private temporary file only when needed. If saving fails, the bounded report explicitly says so. Temporary artifacts are not automatically deleted by this extension.
 - The extension uses the configured model registry and credentials; it requires no separate “subagent API key.” Provider requests still cost money. Child inference usage is **not currently aggregated into the parent's session totals** by this extension; consult provider usage/billing for authoritative spend.
-- No notification/read acknowledgement or automatic retry is implemented. Recover a retained report with `subagents_status` if delivery is uncertain.
+- No automatic notification/read acknowledgement or retry is implemented. Recover a retained report with `subagents_status` if delivery is uncertain; discard it only after reviewing it.
 
 ## Installation
 
@@ -241,10 +267,10 @@ npm exec --yes --package=typescript -- tsc --noEmit
 
 Tests use real in-process Agents and controlled provider streams, without paid API requests. Coverage includes:
 
-- Real Pi extension loading, conservative delegation descriptions/guidelines, task validation, inheritance, tool selection and permission-hook delegation.
+- Real Pi extension loading, absence of opening commands/shortcuts, conservative delegation descriptions/guidelines, required kebab-case names, atomic duplicate-name validation, name reservation/reset, inheritance, tool selection and permission-hook delegation.
 - Concurrent runs, queued guidance, failure/abort handling, stopping, and session cleanup.
 - Structured launch results, nonblocking status, late-steering races, result recovery after enqueue failure, and pending artifact writes.
 - Explicit waits for single/batched dependencies, timeouts, cancellation, failed children, retained results, and session cleanup.
 - A **real busy parent Agent** receiving child findings after its current tool completes and before its next model request—without an extra post-final follow-up.
-- Bounded history, output truncation, UI timers, scroll/focus behavior, mouse interaction, narrow terminals, and both real TUI renderers.
-- Task-first styling, aligned lifecycle states, compact widget failure indicators, real tool/token counters, and finished-transcript controls.
+- Bounded report history, automatic heavy-state/render-cache release, atomic explicit discard, preserved in-flight waits and artifact links, output truncation, UI timers, scroll/focus behavior, framed mouse interaction, narrow terminals, and both real TUI renderers.
+- Name-first styling without prompt leakage into the widget/list, real fullscreen mouse opening, aligned lifecycle states, compact widget failure indicators, real tool/token counters, and finished-transcript controls.

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DefaultResourceLoader, SettingsManager, type Theme } from '@earendil-works/pi-coding-agent';
-import { visibleWidth } from '@earendil-works/pi-tui';
+import { stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
 import usage, {
   abortable, codexAccountId, createUsageLoader, getJson, money, parseCodex, parseOpenRouter, parseRadius, radiusOrigin,
   renderCards, resetLabel, UsageDashboard, type UsageCard,
@@ -279,6 +279,25 @@ test('dashboard fits very short terminals and safely recalculates layout on resi
     dashboard.invalidate();
     assert.ok(dashboard.render(40).length <= height);
   }
+  dashboard.dispose();
+});
+
+test('usage keeps a complete themed frame in compact and normal layouts', async () => {
+  let height = 24;
+  const dashboard = new UsageDashboard(theme, async id => ({ id, status: 'unavailable', headline: '日本語 👨‍👩‍👧‍👦', details: [] }), () => {}, () => height, () => {});
+  await tick();
+  for (height of [3, 4, 5, 8, 10, 24]) {
+    for (const width of [2, 3, 4, 12, 48, 76]) {
+      const lines = dashboard.render(width).map(stripTerminalSequences);
+      assert.ok(lines.length <= height);
+      assert.match(lines[0], /^╭─*╮$/);
+      assert.match(lines.at(-1)!, /^╰─*╯$/);
+      assert.ok(lines.slice(1, -1).every(line => line.startsWith('│') && line.endsWith('│')));
+      assert.ok(lines.every(line => visibleWidth(line) === width));
+    }
+  }
+  height = 5;
+  assert.match(dashboard.render(48).join('\n'), /esc close/);
   dashboard.dispose();
 });
 

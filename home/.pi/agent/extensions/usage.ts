@@ -286,28 +286,33 @@ export class UsageDashboard implements Component {
 
   render(width: number): string[] {
     const th = this.theme;
-    const inner = Math.max(1, width - 4);
-    const border = (s: string) => th.fg('borderMuted', s);
-    const row = (s: string) => border('│') + ' ' + truncateToWidth(s, inner, '', true) + ' ' + border('│');
+    width = Math.max(0, width);
+    const height = Math.max(0, this.height());
+    const border = (s: string) => th.fg('accent', s);
+    if (width < 2 || height < 3) return Array.from({ length: Math.min(height, 2) }, () => border('─'.repeat(width)));
+    const padding = width >= 4 ? ' ' : '';
+    const inner = Math.max(0, width - 2 - padding.length * 2);
+    const row = (s: string) => border('│') + padding + truncateToWidth(s, inner, '', true) + padding + border('│');
+    const top = border(`╭${'─'.repeat(width - 2)}╮`);
+    const bottom = border(`╰${'─'.repeat(width - 2)}╯`);
     const content = renderCards(this.cards, inner, th);
-    const height = Math.max(1, this.height());
     const compact = height < 10;
-    const bodyHeight = Math.max(0, height - (compact ? 2 : 7));
+    const bodyHeight = Math.max(0, height - (compact ? 4 : 7));
     this.maxOffset = Math.max(0, content.length - bodyHeight);
     this.offset = Math.min(this.offset, this.maxOffset);
     const state = this.pending ? 'Checking providers…' : `Checked ${new Date(this.updated ?? Date.now()).toLocaleTimeString()}`;
     if (compact) {
-      return [th.bold('◈ Usage'), ...content.slice(this.offset, this.offset + bodyHeight),
-        th.fg('muted', 'r refresh · esc close · ↑↓ scroll')]
-        .slice(0, height).map(line => truncateToWidth(line, Math.max(0, width), ''));
+      return [top, ...(height >= 4 ? [row(th.bold('◈ Usage'))] : []),
+        ...content.slice(this.offset, this.offset + bodyHeight).map(row),
+        row(th.fg('muted', 'r refresh · esc close · ↑↓ scroll')), bottom];
     }
     const lines = [
-      border(`╭${'─'.repeat(inner + 2)}╮`),
+      top,
       row(`${th.fg('accent', '◈')} ${th.bold('Usage')} ${th.fg('dim', ' / balances & limits')}`),
       row(th.fg('dim', state)), row(''),
       ...content.slice(this.offset, this.offset + bodyHeight).map(row),
       row(''), row(th.fg('muted', `r refresh   esc close${this.maxOffset ? '   ↑↓ scroll' : ''}`)),
-      border(`╰${'─'.repeat(inner + 2)}╯`),
+      bottom,
     ];
     return lines.map(line => truncateToWidth(line, Math.max(0, width), ''));
   }

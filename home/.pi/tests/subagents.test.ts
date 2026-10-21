@@ -54,12 +54,14 @@ function harness(t, mode = 'print', renderer) {
     custom(factory, options) {
       return new Promise((resolve) => {
         const dialog = { closed: false, options };
+        dialog.closedPromise = new Promise(resolve => { dialog.resolveClosed = resolve; });
         const done = () => {
           if (dialog.closed) return;
           dialog.closed = true;
           dialog.handle?.hide();
           dialog.component?.dispose();
           resolve();
+          dialog.resolveClosed();
         };
         dialog.component = factory(tui, theme, kb, done);
         dialog.component.focused = true;
@@ -72,14 +74,14 @@ function harness(t, mode = 'print', renderer) {
   const notifications = [];
   const requests = [];
   const nested = [];
-  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status'];
+  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'];
   const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
   const ctx = {
     mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
     cwd: process.cwd(),
     model: parentModel,
     thinkingLevel: 'medium',
-    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status'].map((name) => ({
+    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'].map((name) => ({
       name, label: name, description: name, parameters: schema,
       execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
     })),
@@ -126,10 +128,30 @@ function harness(t, mode = 'print', renderer) {
   };
   extension(pi);
   const call = (name, params, signal) => tools.get(name).execute('parent-call', params, signal, undefined, ctx);
-  const launch = (tasks, signal) => call('subagents_launch', { tasks }, signal);
+  let nextName = 0;
+  // Existing lifecycle fixtures use generated test names; name-contract tests call
+  // the raw tool so missing names cannot be hidden by this convenience helper.
+  const launch = (tasks, signal) => call('subagents_launch', { tasks: tasks.map(task => ({
+    name: `${task.prompt.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/g, '') || 'task'}-${++nextName}`,
+    ...task,
+  })) }, signal);
   const steer = (id, prompt) => call('subagents_steer', { id, prompt });
   t.after(() => events.get('session_shutdown')());
-  const open = (args = '') => commands.get('subagents').handler(args, ctx);
+  const open = (id) => {
+    const widget = widgets.get('subagents.pi');
+    assert.ok(widget, 'The widget is the only dashboard entry point');
+    const before = dialogs.length;
+    assert.equal(mouse(widget, 0)?.handled, true);
+    assert.equal(dialogs.length, before + 1);
+    const dialog = dialogs.at(-1);
+    if (id) {
+      const index = dialog.component.actions.jobs().findIndex(job => job.id === id);
+      assert.ok(index >= 0);
+      for (let i = 0; i < index; i++) dialog.component.handleInput('\x1b[B');
+      dialog.component.handleInput('\r');
+    }
+    return dialog.closedPromise;
+  };
   return { tools, events, commands, shortcuts, widgets, dialogs, notices, tui, open,
     get renders() { return renders; }, notifications, requests, nested, active, ctx, pi, call, launch, steer };
 }
@@ -156,14 +178,14 @@ test('loads through Pi’s real extension loader', async (t) => {
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status']);
-  assert.ok(result.extensions[0].commands.has('subagents'));
-  assert.ok(result.extensions[0].shortcuts.has('ctrl+shift+a'));
+  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
+  assert.equal(result.extensions[0].commands.size, 0);
+  assert.equal(result.extensions[0].shortcuts.size, 0);
 });
 
-test('registers launch, steer, wait and status tools with structured output contracts', (t) => {
+test('registers launch, steer, wait, discard and status tools with structured output contracts', (t) => {
   const h = harness(t);
-  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_status']);
+  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
   for (const tool of h.tools.values()) assert.equal(tool.outputSchema.type, 'object');
 });
 
@@ -200,6 +222,219 @@ test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out
   assert.match(guidance, /automatically resume an idle parent/);
   assert.match(guidance, /Do not declare delegated work complete until you have checked its result/);
   assert.match(guidance, /Check each returned status before continuing/);
+  assert.match(guidance, /After reviewing and integrating.*subagents_discard/);
+  assert.match(guidance, /never discard unread results/);
+});
+
+test('finished jobs release Agent, tool results, subscriptions and UI caches but preserve bounded reports', async (t) => {
+  const h = harness(t, 'tui');
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'release heavy state' }]);
+  await until(() => h.requests.length === 1);
+  const opened = h.open(id);
+  const panel = h.dialogs[0].component;
+  const job = panel.viewedJob;
+  h.ctx.executeTool = async () => ({
+    result: { content: [{ type: 'text', text: 'HEAVY_TOOL_PAYLOAD'.repeat(10000) }], details: undefined },
+    isError: false,
+  });
+  h.requests[0].finish('', 'toolUse', {
+    content: [{ type: 'toolCall', id: 'heavy-read', name: 'read', arguments: { path: 'large.txt' } }],
+  });
+  await until(() => h.requests.length === 2);
+  streamPartial(h.requests[1], 'partial response', 'private reasoning');
+  await until(() => screen(panel).includes('partial response'));
+  assert.ok(job.agent);
+  assert.ok(job.tools.size);
+  assert.ok(panel.messages.size);
+  assert.ok(panel.toolComponents.size);
+  assert.ok(panel.transcript.mouseLayout.children.length);
+  panel.handleInput('an unused draft');
+  panel.handleInput('\x1b'); // Release caches even while viewing the list rather than transcript.
+  h.requests[1].finish('small final report');
+  const waited = await h.call('subagents_wait', { ids: [id] });
+  assert.match(waited.structuredContent.agents[0].result, /small final report/);
+  assert.equal(job.agent, undefined);
+  assert.equal(job.unsubscribe, undefined);
+  assert.equal(job.done, undefined);
+  assert.equal(job.tools.size, 0);
+  assert.equal(panel.messages.size, 0);
+  assert.equal(panel.toolComponents.size, 0);
+  assert.deepEqual(panel.transcript.mouseLayout.children, []);
+  assert.equal(panel.lastStreaming, undefined);
+  assert.equal(panel.partial, undefined);
+  assert.equal(panel.composing.getExpandedText(), '');
+  assert.equal(panel.drafts.size, 0);
+  panel.handleInput('\r');
+  assert.match(screen(panel), /small final report/);
+  assert.doesNotMatch(screen(panel), /HEAVY_TOOL_PAYLOAD|private reasoning|an unused draft/);
+  await h.call('subagents_discard', { ids: [id] });
+  assert.equal(panel.viewedJob, undefined);
+  assert.match(screen(panel), /No subagents yet/);
+  assert.equal(screen(h.widgets.get('subagents.pi')), '');
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  assert.equal(h.notifications.length, 1); // Delivered report is not retracted.
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('discard validates the full batch, rejects unfinished jobs and removes only selected finished reports', async (t) => {
+  const h = harness(t);
+  const { details: { ids: [finished, running] } } = await h.launch([{ prompt: 'finished' }, { prompt: 'still running' }]);
+  await until(() => h.requests.length === 2);
+  h.requests[0].finish('reviewed answer');
+  await h.call('subagents_wait', { ids: [finished] });
+  for (const ids of [[], [finished, finished], [finished, 'missing'], [finished, running], [finished.slice(0, 8)]]) {
+    await assert.rejects(h.call('subagents_discard', { ids }));
+    assert.equal((await h.call('subagents_status', {})).structuredContent.agents.length, 2);
+  }
+  const controller = new AbortController();
+  controller.abort();
+  await assert.rejects(h.call('subagents_discard', { ids: [finished] }, controller.signal), { name: 'AbortError' });
+  const result = await h.call('subagents_discard', { ids: [finished] });
+  assert.deepEqual(result.structuredContent, { ids: [finished] });
+  await assert.rejects(h.call('subagents_status', { id: finished }), /Unknown or no longer retained/);
+  await assert.rejects(h.call('subagents_wait', { ids: [finished] }), /Unknown or no longer retained/);
+  await assert.rejects(h.steer(finished, 'late guidance'), /no longer retained/);
+  await assert.rejects(h.call('subagents_discard', { ids: [finished] }), /Unknown or no longer retained/);
+  assert.equal(h.requests[1].options.signal.aborted, false);
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents.map(job => job.id), [running]);
+});
+
+test('discard does not invalidate reports held by an already-running batch wait', async (t) => {
+  const h = harness(t);
+  const { details: { ids } } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
+  await until(() => h.requests.length === 2);
+  const waiting = h.call('subagents_wait', { ids });
+  h.requests[0].finish('first findings');
+  await h.call('subagents_wait', { ids: [ids[0]] });
+  await h.call('subagents_discard', { ids: [ids[0]] });
+  h.requests[1].finish('second findings');
+  const result = (await waiting).structuredContent;
+  assert.equal(result.timedOut, false);
+  assert.deepEqual(result.agents.map(agent => agent.id), ids);
+  assert.match(result.agents[0].result, /first findings/);
+  assert.match(result.agents[1].result, /second findings/);
+});
+
+for (const stopReason of ['error', 'aborted']) {
+  test(`failed jobs release agent state and can be discarded even if notification enqueue fails (${stopReason})`, async (t) => {
+    const h = harness(t, 'tui');
+    t.mock.method(console, 'error', () => {});
+    h.pi.sendMessage = () => { throw new Error('enqueue unavailable'); };
+    const { details: { ids: [id] } } = await h.launch([{ prompt: 'failure cleanup' }]);
+    await until(() => h.requests.length === 1);
+    const opened = h.open(id);
+    const panel = h.dialogs[0].component;
+    const job = panel.viewedJob;
+    h.requests[0].finish('recoverable findings', stopReason, { errorMessage: 'provider failed' });
+    const result = (await h.call('subagents_wait', { ids: [id] })).structuredContent.agents[0];
+    assert.equal(result.notification, 'failed');
+    assert.equal(result.status, 'failed');
+    assert.match(result.result, /recoverable findings/);
+    assert.equal(job.agent, undefined);
+    assert.equal(job.unsubscribe, undefined);
+    await h.call('subagents_discard', { ids: [id] });
+    panel.handleInput('\x1b');
+    await opened;
+  });
+}
+
+test('launch requires short kebab-case names and uses them unchanged as IDs throughout the lifecycle', async (t) => {
+  const h = harness(t, 'tui');
+  const taskSchema = h.tools.get('subagents_launch').parameters.properties.tasks.items;
+  assert.ok(taskSchema.required.includes('name'));
+  assert.equal(taskSchema.properties.name.maxLength, 48);
+  assert.match(h.tools.get('subagents_launch').promptGuidelines.join('\n'), /meaningful short kebab-case name/);
+  const launched = await h.call('subagents_launch', { tasks: [
+    { name: 'review-parser', prompt: 'Full task context that must not appear in the footer' },
+    { name: 'write-tests', prompt: 'Another detailed assignment for the child' },
+  ] });
+  assert.deepEqual(launched.structuredContent.ids, ['review-parser', 'write-tests']);
+  assert.deepEqual(launched.structuredContent.agents.map(agent => agent.id), ['review-parser', 'write-tests']);
+  await until(() => h.requests.length === 2);
+  const widget = screen(h.widgets.get('subagents.pi'));
+  assert.match(widget, /review-parser/);
+  assert.match(widget, /write-tests/);
+  assert.doesNotMatch(widget, /Full task context|Another detailed|Ctrl\+Shift\+A|\/subagents/);
+  const opened = h.open();
+  const panel = h.dialogs[0].component;
+  assert.match(screen(panel), /review-parser/);
+  assert.doesNotMatch(screen(panel), /Full task context|Another detailed/);
+  panel.handleInput('\r');
+  assert.match(screen(panel), /Subagents \/ review-parser/);
+  assert.match(screen(panel), /Full task context/); // Full assignment remains in child detail.
+  const steered = await h.steer('review-parser', 'Additional direction');
+  assert.equal(steered.structuredContent.accepted, true);
+  assert.equal((await h.call('subagents_status', { id: 'review-parser' })).structuredContent.agents[0].id, 'review-parser');
+  h.requests[0].finish('first pass');
+  h.requests[1].finish('tests complete');
+  await until(() => h.requests.length === 3);
+  h.requests[2].finish('final parser review');
+  const result = await h.call('subagents_wait', { ids: ['review-parser', 'write-tests'] });
+  assert.deepEqual(result.structuredContent.agents.map(agent => agent.id), ['review-parser', 'write-tests']);
+  assert.match(result.structuredContent.agents[0].result, /Subagent review-parser completed/);
+  assert.ok(h.notifications.some(item => item.message.details.id === 'review-parser'));
+  await h.call('subagents_discard', { ids: ['review-parser', 'write-tests'] });
+  panel.handleInput('\x1b');
+  await opened;
+});
+
+test('invalid, missing and duplicate names reject the whole batch without starting or reserving children', async (t) => {
+  const h = harness(t);
+  for (const name of [undefined, null, 123, '', ' ', 'Upper-case', 'two words', 'snake_case', '-leading',
+    'trailing-', 'double--dash', '1-leading', '日本語', 'line-break\n', 'a'.repeat(49)]) {
+    await assert.rejects(h.call('subagents_launch', { tasks: [
+      { name: 'valid-task', prompt: 'valid' }, { name, prompt: 'invalid name' },
+    ] }), /lowercase kebab-case/);
+  }
+  await assert.rejects(h.call('subagents_launch', { tasks: [
+    { name: 'same-name', prompt: 'one' }, { name: 'same-name', prompt: 'two' },
+  ] }), /name already used/);
+  await assert.rejects(h.call('subagents_launch', { tasks: [
+    { name: 'valid-task', prompt: 'valid' }, { name: 'bad-model', prompt: 'invalid model', model: 'missing' },
+  ] }), /Unknown subagent model/);
+  assert.equal(h.requests.length, 0);
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  const result = await h.call('subagents_launch', { tasks: [{ name: 'valid-task', prompt: 'allowed after failed validation' }] });
+  assert.deepEqual(result.structuredContent.ids, ['valid-task']);
+  await until(() => h.requests.length === 1);
+});
+
+test('names cannot collide across concurrent launches or be reused after discard, but reset with the session', async (t) => {
+  const h = harness(t);
+  const launch = () => h.call('subagents_launch', { tasks: [{ name: 'review-parser', prompt: 'task' }] });
+  const attempts = await Promise.allSettled([launch(), launch()]);
+  assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 1);
+  assert.equal(attempts.filter(result => result.status === 'rejected').length, 1);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('report');
+  await h.call('subagents_wait', { ids: ['review-parser'] });
+  await h.call('subagents_discard', { ids: ['review-parser'] });
+  await assert.rejects(launch(), /name already used/);
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  await h.events.get('session_start')();
+  assert.deepEqual((await launch()).structuredContent.ids, ['review-parser']);
+  await until(() => h.requests.length === 2);
+});
+
+test('only a left mouse click on the widget opens the dashboard; no commands or shortcuts are registered', async (t) => {
+  const h = harness(t, 'tui');
+  assert.equal(h.commands.size, 0);
+  assert.equal(h.shortcuts.size, 0);
+  await h.launch([{ name: 'click-target', prompt: 'private task text' }]);
+  await until(() => h.requests.length === 1);
+  const widget = h.widgets.get('subagents.pi');
+  widget.handleMouse({ type: 'click', button: 'right' });
+  widget.handleMouse({ type: 'wheel', wheelDelta: 1 });
+  assert.equal(h.dialogs.length, 0);
+  const opened = h.open();
+  mouse(widget, 0); // Repeated clicks must not stack dashboards.
+  assert.equal(h.dialogs.length, 1);
+  h.dialogs[0].component.handleInput('\x1b');
+  await opened;
+  const reopened = h.open();
+  h.dialogs[1].component.handleInput('\x1b');
+  await reopened;
 });
 
 test('launch returns IDs without waiting; children run in parallel and notify out of order exactly once', async (t) => {
@@ -460,7 +695,7 @@ function streamPartial(request, text, thinking = '') {
   return partial;
 }
 
-function mouse(component, y, x = 1, width = 96) {
+function mouse(component, y, x = 2, width = 96) {
   return component.handleMouse({ type: 'click', button: 'left', x, y, screenX: x, screenY: y,
     width, height: component.render(width).length, shift: false, alt: false, ctrl: false });
 }
@@ -497,10 +732,10 @@ for (const mode of ['print', 'json', 'rpc']) {
     const h = harness(t, mode);
     await h.launch([{ prompt: 'headless' }]);
     await until(() => h.requests.length === 1);
-    await h.open();
+    assert.equal(h.commands.size, 0);
+    assert.equal(h.shortcuts.size, 0);
     assert.equal(h.widgets.size, 0);
     assert.equal(h.dialogs.length, 0);
-    assert.match(h.notices[0].text, /interactive TUI/);
     h.requests[0].finish('headless result');
     await until(() => h.notifications.length === 1);
   });
@@ -510,7 +745,7 @@ test('dashboard shows live native messages, thinking, tools, errors, and complet
   const h = harness(t, 'tui');
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect files' }]);
   await until(() => h.requests.length === 1);
-  const opened = h.open(id.slice(0, 8));
+  const opened = h.open(id);
   const panel = h.dialogs[0].component;
   assert.match(screen(panel), /Inspect files/);
   streamPartial(h.requests[0], 'Streaming response', 'Private reasoning');
@@ -543,7 +778,7 @@ test('manual steering uses a multiline child editor and never sends guidance to 
   const h = harness(t, 'tui');
   await h.launch([{ prompt: 'Original assignment' }]);
   await until(() => h.requests.length === 1);
-  const opened = h.shortcuts.get('ctrl+shift+a').handler(h.ctx);
+  const opened = h.open();
   const panel = h.dialogs[0].component;
   panel.handleInput('\r');
   panel.handleInput('\x1b[200~Focus on tests\nand report risks\x1b[201~');
@@ -667,14 +902,14 @@ test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidat
   const panel = h.dialogs[0].component;
   const widget = h.widgets.get('subagents.pi');
   assert.match(screen(widget), /\+3 more/);
-  for (const width of [1, 8, 24, 80]) {
+  for (const width of [0, 1, 2, 3, 8, 24, 80]) {
     for (const rows of [8, 20, 40]) {
       h.tui.terminal.rows = rows;
       for (const component of [widget, panel]) {
         component.invalidate();
         const lines = component.render(width);
         assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}`);
-        if (component === panel) assert.ok(lines.length <= Math.max(4, rows - 4));
+        if (component === panel) assert.ok(lines.length <= rows - (rows < 10 ? 2 : 4));
       }
     }
   }
@@ -685,28 +920,33 @@ test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidat
   await opened;
 });
 
-test('Claude-inspired list prioritizes tasks, aligns state, and uses quiet indented details', async (t) => {
+test('bordered list prioritizes tasks, aligns state, and uses quiet indented details', async (t) => {
   const h = harness(t, 'tui');
-  const { details: { ids } } = await h.launch([{ prompt: 'Review the parser ' + 'with a very long assignment '.repeat(8) }, { prompt: 'Write regression tests' }]);
+  const { details: { ids } } = await h.launch([{ name: 'review-parser', prompt: 'Review the parser ' + 'with a very long assignment '.repeat(8) }, { name: 'write-tests', prompt: 'Write regression tests' }]);
   await until(() => h.requests.length === 2);
   const opened = h.open();
   const panel = h.dialogs[0].component;
   const backgrounds = [];
   h.ctx.ui.theme.bg = (color, text) => { backgrounds.push(color); return text; };
   const lines = panel.render(96).map(stripTerminalSequences);
-  assert.match(lines[0], /Subagents.*2 running/);
-  assert.match(lines[1], /Background tasks/);
+  assert.match(lines[0], /^╭─+╮$/);
+  assert.match(lines.at(-1), /^╰─+╯$/);
+  assert.ok(lines.slice(1, -1).every(line => line.startsWith('│') && line.endsWith('│')));
+  assert.match(lines[1], /Subagents.*2 running/);
+  assert.match(lines[2], /Background tasks/);
   const selected = lines.findIndex(line => line.includes('›'));
-  assert.match(lines[selected], /› .*Review the parser.*running · 0:00$/);
+  assert.match(lines[selected], /› .*review-parser.*running · 0:00│$/);
   assert.match(lines[selected + 1], /⎿.*parent-model.*0 tool uses/);
   assert.equal(visibleWidth(lines[selected]), 96);
-  assert.doesNotMatch(lines.join('\n'), /[╭╮╰╯]|\[.*running\]/);
-  for (const id of ids) assert.ok(!lines.join('\n').includes(id.slice(0, 8)));
+  assert.doesNotMatch(lines.join('\n'), /\[.*running\]/);
+  for (const id of ids) assert.ok(lines.join('\n').includes(id));
+  assert.doesNotMatch(lines.join('\n'), /Review the parser|Write regression tests/);
   assert.deepEqual(backgrounds, []); // No full-width cards or selection bands.
   const widget = screen(h.widgets.get('subagents.pi'));
-  assert.match(widget, /⎿.*Review the parser/);
-  assert.match(widget, /Ctrl\+Shift\+A to manage/);
-  for (const id of ids) assert.ok(!widget.includes(id.slice(0, 8)));
+  assert.match(widget, /⎿.*review-parser/);
+  assert.match(widget, /Click to view/);
+  assert.doesNotMatch(widget, /Review the parser|Write regression tests|Ctrl\+Shift\+A|\/subagents/);
+  for (const id of ids) assert.ok(widget.includes(id));
   panel.handleInput('\x1b');
   await opened;
 });
@@ -731,10 +971,11 @@ test('child counters use actual tool calls and finalized tokens, and finished UI
   await until(() => h.notifications.length === 1);
   panel.handleInput('\r');
   const transcript = screen(panel);
-  assert.match(transcript, /Subagents \/ Inspect usage counters/);
-  assert.match(transcript, new RegExp(id.slice(0, 8)));
-  assert.match(transcript, /End of transcript/);
-  assert.doesNotMatch(transcript, /Enter.*steer|Ctrl\+X.*stop|Following live output/);
+  assert.match(transcript, new RegExp(`Subagents / ${id}`));
+  assert.match(transcript, /End of report/);
+  assert.match(transcript, /full agent state released/);
+  assert.match(transcript, /1 tool use · 1\.2K tokens/);
+  assert.doesNotMatch(transcript, /Enter.*steer|Ctrl\+X.*stop|Following live output|Ctrl\+O.*tools|Ctrl\+T.*thinking/);
   panel.handleInput('\x1b');
   panel.handleInput('\x1b');
   await opened;
@@ -785,7 +1026,7 @@ test('session cleanup closes dashboards, removes widgets, and suppresses stale c
 
 test('history is bounded without evicting running agents, and a viewed child stays selected', async (t) => {
   const h = harness(t, 'tui');
-  await h.launch([{ prompt: 'older finished child' }]);
+  await h.launch([{ name: 'older-finished-child', prompt: 'older finished child' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('older answer');
   await until(() => h.notifications.length === 1);
@@ -809,6 +1050,7 @@ test('history is bounded without evicting running agents, and a viewed child sta
   assert.equal(retained.length, 21);
   assert.equal(retained.find((job) => job.id === runningId).status, 'running');
   assert.ok(!retained.some((job) => job.prompt === 'older finished child'));
+  await assert.rejects(h.launch([{ name: 'older-finished-child', prompt: 'must not reuse evicted name' }]), /name already used/);
 });
 
 test('an open finished transcript stays visible after eviction from bounded history', async (t) => {
@@ -861,9 +1103,13 @@ test('stop confirmation and steering input remain visible on an eight-row termin
   const panel = h.dialogs[0].component;
   panel.handleInput('x');
   const confirmation = screen(panel, 48);
-  assert.match(confirmation, new RegExp(`Stop ${id.slice(0, 8)}`));
+  assert.match(confirmation, new RegExp(`Stop ${id}`));
   assert.match(confirmation, /y stop.*n \/ Esc cancel/);
   assert.match(confirmation, /Cannot undo/);
+  const frame = panel.render(48).map(stripTerminalSequences);
+  assert.match(frame[0], /^╭─+╮$/);
+  assert.match(frame.at(-1), /^╰─+╯$/);
+  assert.ok(frame.slice(1, -1).every(line => line.startsWith('│') && line.endsWith('│')));
   assert.equal(h.requests[0].options.signal.aborted, false);
   panel.handleInput('n');
   panel.handleInput('\r');
@@ -942,7 +1188,7 @@ test('clicking a clipped multiline editor repositions the cursor in the correct 
   panel.handleInput(`\x1b[200~${draft}\x1b[201~`);
   const row = panel.render(96).map(stripTerminalSequences).findIndex((line) => line.includes('draft-row-9'));
   assert.ok(row >= 0);
-  const result = mouse(panel, row, 0);
+  const result = mouse(panel, row, 1);
   assert.equal(result?.focus, true);
   panel.handleInput('INSERTED ');
   panel.handleInput('\r');
@@ -1169,7 +1415,21 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
       : renderer.captureRenderState().previousLines).map(stripTerminalSequences).join('\n');
     await h.launch([{ prompt: 'Live child transcript' }]);
     await until(() => h.requests.length === 1);
-    const opened = h.open();
+    let opened;
+    if (renderer instanceof TuiAltScreen) {
+      renderer.addChild(h.widgets.get('subagents.pi'));
+      renderer.renderNow(true);
+      const row = renderer.getScreenLines().map(stripTerminalSequences).findIndex(line => line.includes('Subagents'));
+      assert.ok(row >= 0);
+      terminal.input(`\x1b[<0;2;${row + 1}M`);
+      terminal.input(`\x1b[<0;2;${row + 1}m`);
+      assert.equal(h.dialogs.length, 1);
+      opened = h.dialogs[0].closedPromise;
+    } else {
+      // Regular-mode Pi does not route mouse input. Exercise the component's
+      // click handler directly to test overlay rendering, not its accessibility.
+      opened = h.open();
+    }
     renderer.renderNow(true);
     assert.match(rendered(), /Subagents/);
     terminal.input('\r');
@@ -1183,7 +1443,7 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
       const bounds = dialog.handle.getBounds();
       const row = dialog.component.render(bounds.width).map(stripTerminalSequences).findIndex((line) => line.includes('Manual guidance'));
       assert.ok(row >= 0);
-      const x = bounds.col + 1;
+      const x = bounds.col + 2; // Terminal columns are 1-based, plus the left frame.
       const y = bounds.row + row + 1;
       terminal.input(`\x1b[<0;${x};${y}M`);
       terminal.input(`\x1b[<0;${x};${y}m`);
@@ -1458,6 +1718,7 @@ test('wait remains pending through report artifact preparation and returns the f
     assert.equal(pending.agents[0].status, 'completed');
     assert.equal(pending.agents[0].notification, 'pending');
     assert.match(pending.agents[0].result, /preparing full response file/);
+    await assert.rejects(h.call('subagents_discard', { ids }), /has not finished execution and report preparation/);
     release();
     const { structuredContent: result } = await waiting;
     assert.equal(result.timedOut, false);
@@ -1465,7 +1726,8 @@ test('wait remains pending through report artifact preparation and returns the f
     assert.equal(result.agents[0].notification, 'queued');
     assert.ok(result.agents[0].result.includes(path));
     assert.doesNotMatch(result.agents[0].result, /preparing full response file/);
-    assert.ok((await readFile(path, 'utf8')).endsWith(answer));
+    await h.call('subagents_discard', { ids });
+    assert.ok((await readFile(path, 'utf8')).endsWith(answer)); // Discard never breaks delivered artifact links.
     assert.equal(h.notifications.length, 1);
     assert.equal(h.notifications[0].message.details.fullOutputPath, path);
   } finally {
@@ -1481,7 +1743,7 @@ for (const scrolled of [false, true]) {
   test(`clicking a dashboard entry's second detail row opens the correct child${scrolled ? ' after list scrolling' : ''}`, async (t) => {
     const h = harness(t, 'tui');
     h.tui.terminal.rows = 20;
-    await h.launch(Array.from({ length: 12 }, (_, i) => ({ prompt: `mouse-target-${i}` })));
+    await h.launch(Array.from({ length: 12 }, (_, i) => ({ name: `mouse-target-${i}`, prompt: `mouse-target-${i}` })));
     await until(() => h.requests.length === 12);
     const opened = h.open();
     const panel = h.dialogs[0].component;
