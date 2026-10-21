@@ -5,7 +5,17 @@ import { WebToolsError, type ProviderContext, type SearchInput } from '../contra
 import { createOpenRouterProvider } from '../providers/openrouter.ts';
 
 const query: SearchInput = { query: '  focused query  ', max_results: 5, search_context_size: 'high' };
-const context: ProviderContext = { async getApiKey() { return ' test-key '; } };
+const context: ProviderContext = {
+  async getApiKey() { return ' test-key '; },
+  async classify(model, input, options) {
+    assert.equal(options.apiKey, 'test-key');
+    return { api: 'typesafe-system-one', provider: 'openrouter', model, timestamp: 0, stopReason: 'stop',
+      answers: Object.fromEntries(Object.keys(input.questions).map(id => [id, { type: 'score', score: 3, confidence: 1 }])),
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+  },
+};
 function settings() {
   return { ...structuredClone(config.openrouter), apiKeyEnv: 'WEB_TOOLS_OPENROUTER_OFFLINE_TEST_KEY', usePiCredentials: true };
 }
@@ -31,7 +41,7 @@ function code(expected: string) {
   return (error: unknown) => error instanceof WebToolsError && error.code === expected;
 }
 
-test('search uses supplied settings, one bounded server tool, structured report and separate annotations', async t => {
+test('search uses one bounded server tool, status-only output and Jev-selected annotations', async t => {
   const fetch = mockApi(t);
   const s = settings(); s.endpoint = 'https://trusted.example/chat'; s.model = 'custom/model'; s.maxOutputTokens = 1234;
   const signal = new AbortController().signal;
@@ -60,12 +70,26 @@ test('search uses supplied settings, one bounded server tool, structured report 
   assert.equal(result.query, 'focused query'); assert.equal(result.operation, 'search');
   assert.equal(result.results, result.sources);
   assert.deepEqual(result.sources, [{ url: 'https://example.com/', title: 'Page', snippet: 'Provider excerpt', date: null, last_updated: null }]);
-  assert.match(result.report!, /invented/); assert.equal(result.error, null);
+  assert.equal(result.report, null); assert.equal(result.error, null);
+  assert.deepEqual(body.response_format.json_schema.schema.required, ['status']);
+  assert.match(body.messages[0].content, /Do not summarize, rank, filter, rewrite/);
+  assert.doesNotMatch(JSON.stringify(response), /invented|test-key/);
   assert.deepEqual(result.warnings, []);
-  assert.deepEqual(result.metadata, { result_order: 'citation', retrieval_evidence: 'tool_execution',
+  assert.deepEqual(result.metadata, { ranking: { model: s.ranking.model, status: 'ranked', candidates: 1, selected: 1,
+    scores: [{ url: 'https://example.com/', score: 3 }] }, result_order: 'ranked', retrieval_evidence: 'tool_execution',
     model: 'returned/model', request_id: 'req-123', tool_calls: 1, cost_usd: 0.125 });
   assert.deepEqual(usage, { input: 85, output: 20, cacheRead: 10, cacheWrite: 5, reasoning: 4, totalTokens: 120,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.125 } });
+});
+
+test('search rejects invalid status responses even with usable provider annotations', async t => {
+  for (const content of ['not JSON', 'null', '{}', '{"status":"other"}', '{"status":["ok"]}']) {
+    await t.test(content, async t => {
+      const data = payload(); data.choices[0].message.content = content;
+      mockApi(t, data);
+      await assert.rejects(createOpenRouterProvider(settings()).search(query, context), code('invalid_response'));
+    });
+  }
 });
 
 test('annotations are normalized, deduplicated in citation order, safe, and never derived from report', async t => {
@@ -103,13 +127,13 @@ test('fetch does not assume redirects, strip fragments, or substitute unrelated 
   }
 });
 
-test('report status is authoritative; errors are structured and missing annotations warn', async t => {
+test('fetch report status is authoritative; errors are structured and missing annotations warn', async t => {
   for (const status of ['ok', 'not_found', 'error']) {
     await t.test(status, async t => {
       const data = payload(); data.choices[0].message.content = JSON.stringify({ status, report: 'Retrieval notes' });
       data.choices[0].message.annotations = [];
       mockApi(t, data);
-      const { result } = await createOpenRouterProvider(settings()).search(query, context);
+      const { result } = await createOpenRouterProvider(settings()).fetch({ url: 'https://example.com', objective: 'text' }, context);
       assert.equal(result.status, status); assert.deepEqual(result.sources, []);
       assert.equal(result.error?.code ?? null, status === 'error' ? 'retrieval_failed' : null);
       assert.ok(result.warnings.length); assert.equal(result.report, 'Retrieval notes');
@@ -153,7 +177,7 @@ test('malformed reports, refusal, incomplete completion and missing messages fai
   ];
   for (const [index, data] of cases.entries()) await t.test(String(index), async t => {
     const fetch = mockApi(t, data);
-    await assert.rejects(createOpenRouterProvider(settings()).search(query, context), code('invalid_response'));
+    await assert.rejects(createOpenRouterProvider(settings()).fetch({ url: 'https://example.com', objective: 'text' }, context), code('invalid_response'));
     assert.equal(fetch.mock.callCount(), 1);
   });
 });
@@ -210,6 +234,8 @@ test('bad config and invalid inputs fail locally, including search/fetch revalid
   const fetch = mockApi(t);
   const bad = [ { timeoutMs: 0 }, { maxOutputTokens: 1.5 }, { endpoint: 'file:///tmp/key' }, { endpoint: 'https://user:pass@example.com' },
     { model: ' ' }, { apiKeyEnv: '' }, { usePiCredentials: 'yes' },
+    ...[{ model: ' ' }, { maxResults: 0 }, { maxResults: 1.5 }, { minScore: -1 }, { minScore: 4 },
+      { minScore: NaN }, { timeoutMs: 0 }].map(change => ({ ranking: { ...settings().ranking, ...change } })),
     { search: { engine: 'native', mode: 'advanced' } }, { search: { engine: 'parallel', mode: 'deep' } },
     { search: { engine: 'exa', mode: 'advanced' } }, { search: { engine: 'toString', mode: 'advanced' } },
     { fetch: { engine: 'auto', maxContentTokens: 5 } }, { fetch: { engine: 'parallel', maxContentTokens: -1 } },

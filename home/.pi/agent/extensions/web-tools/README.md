@@ -24,10 +24,14 @@ The main settings are:
 | `output.maxLines` / `maxBytes` | 1,000 / 25,600 | Model-facing Markdown limits |
 | `openrouter.model` | `openai/gpt-6.1-sol` | Nested retrieval model, not Pi's model |
 | `openrouter.search.engine` / `mode` | `parallel` / `advanced` | Search backend and mode |
+| `openrouter.ranking.model` | `typesafe/jev-1.13` | OpenRouter classifier for search relevance |
+| `openrouter.ranking.maxResults` | `5` | Maximum selected excerpts, also capped by the call's `max_results` |
+| `openrouter.ranking.minScore` | `1.5` | Minimum expected relevance on a 0–3 scale |
+| `openrouter.ranking.timeoutMs` | `30,000` | Separate classification deadline |
 | `openrouter.fetch.engine` | `parallel` | Extraction backend |
 | `openrouter.fetch.maxContentTokens` | 50,000 | Extractor input-content limit |
 | `openrouter.maxOutputTokens` | 8,000 | Nested model output budget |
-| `openrouter.timeoutMs` | 180,000 | Whole-request timeout |
+| `openrouter.timeoutMs` | 180,000 | Retrieval-request timeout (ranking has a separate deadline) |
 | `perplexity.timeoutMs` | 60,000 | Whole-request timeout |
 | `perplexity.fetch` | low / 2 steps / 1,200 tokens | Agent preset and budgets |
 
@@ -35,7 +39,7 @@ OpenRouter search supports explicit `parallel`, `exa`, or `perplexity` engines; 
 
 ### Credentials
 
-- OpenRouter: `OPENROUTER_API_KEY`, then Pi's configured `openrouter` credential. The fallback can be disabled in `config.ts`.
+- OpenRouter: `OPENROUTER_API_KEY`, then Pi's configured `openrouter` credential. The fallback can be disabled in `config.ts`. Both Sol retrieval and Jev classification use the same resolved credential. Jev runs through Pi's OpenRouter classifier catalog/API; changing the chat `endpoint` does not redirect classification.
 - Perplexity: `PERPLEXITY_API_KEY` only.
 - Optional trusted Perplexity API-root override: `PERPLEXITY_API_BASE_URL`.
 
@@ -79,7 +83,11 @@ Both tools return source-first Markdown to the main model, and untruncated struc
     model: string | null,
     request_id: string | null,
     tool_calls: number | null,
-    cost_usd: number | null
+    cost_usd: number | null,
+    ranking?: { // OpenRouter search only, when relevance selection was attempted
+      model: string, status: "ranked" | "fallback", candidates: number, selected: number,
+      scores: { url: string, score: number }[]
+    }
   },
   warnings: string[],
   error: { code, message } | null,
@@ -91,7 +99,7 @@ Search adds `operation: "search"`, `query`, and `results` (the same provider sou
 
 - `snippet` is a provider-returned excerpt or null. Missing dates and costs stay null, not invented values.
 - Fetch `content` is a provider excerpt whose normalized URL **exactly matches the requested URL**. Unverified redirects and unrelated citations do not count. All returned sources remain visible separately.
-- `report` contains remote-model synthesis/notes. It is never substituted for `content` or `snippet`.
+- `report` contains remote-model synthesis/notes when applicable. OpenRouter search always returns `report: null`. Reports are never substituted for `content` or `snippet`.
 - Retrieval evidence proves only the stated API/tool behavior, not the truth of every claim or access to every source.
 - Retrieval/selection failures return `isError: true` with a structured error. No-results is distinct from failure. Pi's own argument-schema validation and invalid extension configuration can fail before execution.
 - Standard errors cover invalid input, unsupported options, configuration/authentication, HTTP/transport, timeout, cancellation, invalid provider responses, and retrieval failure. No automatic retry or cross-provider fallback occurs.
@@ -100,15 +108,28 @@ Search adds `operation: "search"`, `query`, and `results` (the same provider sou
 
 | Concern | Perplexity | OpenRouter |
 | --- | --- | --- |
-| Search | Direct `/search` API | Nested model invokes one server search tool |
-| Source order | Ranked results | Citation order; ranking/completeness not guaranteed |
+| Search | Direct `/search` API | Sol invokes one server search tool; Jev scores original annotation excerpts |
+| Source order | Ranked results | Jev relevance order; citation order with explicit warning if classification fails |
 | `recency` | hour/day/week/month/year | Explicit `unsupported_option` error; never ignored |
 | Context size | Provider-defined per-result budget | Engine-dependent; Parallel uses total context |
 | Fetch | Agent API with `fetch_url` | Nested model invokes one server fetch tool |
 | Notes-only fetch | Error: no tool-result evidence | Can be report-only success **if API confirms execution** |
 | Fetch URL mismatch | Error; notes/sources retained | Null page fields with warning; report may remain useful |
 
-The stable contract guarantees consistent interpretation, not identical ranking, latency, cost, excerpts, or provider evidence. OpenRouter requires a confirmed single server-tool execution and a final, valid report. Perplexity fetch requires a matching tool result and rejects explicit failed/non-final statuses. Empty extracted text is not replaced by notes. Both remain best-effort extraction, not raw HTML or a complete/verbatim page guarantee. Neither bypasses paywalls or authentication.
+The stable contract guarantees consistent interpretation, not identical ranking, latency, cost, excerpts, or provider evidence. OpenRouter requires a confirmed single server-tool execution and a final, valid status response (plus a report for fetch only). Perplexity fetch requires a matching tool result and rejects explicit failed/non-final statuses. Empty extracted text is not replaced by notes. Both remain best-effort extraction, not raw HTML or a complete/verbatim page guarantee. Neither bypasses paywalls or authentication.
+
+### OpenRouter search: Sol → Jev → original excerpts
+
+1. Sol invokes the configured search engine once, then emits only a status object—not a generated retrieval report.
+2. Code extracts provider `url_citation` annotations, validates/canonicalizes URLs, and deduplicates URLs in citation order. Missing or whitespace-only excerpts are ineligible. Excerpt strings are never trimmed, paraphrased, or generated by either model.
+3. Jev receives the query and eligible results in one classification request, with a relevance-score question per result. The scale runs from 0 (unrelated) to 3 (directly useful); fractional scores are expected values, not truth probabilities.
+4. Code sorts by descending score (ties preserve citation order), applies `minScore`, and selects at most `min(max_results, ranking.maxResults)` original source records. By default, search requests up to eight engine results and returns at most five selected excerpts.
+
+The output includes titles, validated URLs, unchanged excerpts, and ranking metadata—not Sol's prose. `ranking.scores` includes all scored candidates, even those not selected. Jev scores usefulness, not factual correctness. Broad queries do not implicitly request current news.
+
+Classification failure, timeout, unavailable model, or malformed scores return eligible excerpts in original citation order, capped to the same count, with `ranking.status: "fallback"` and a warning. There is no retry or model/provider substitution. Caller cancellation remains cancellation. An entirely low-scoring batch returns `not_found`; a claimed successful search with no usable provider excerpts returns an error rather than model-generated evidence.
+
+**Verbatim means unchanged from the provider-returned excerpts**, not full original webpages. Annotations can be incomplete or truncated upstream; local Markdown truncation is still explicit. Jev cannot recover omitted search results or repair incorrect source material. Web fetch and the direct Perplexity provider do not use this ranking stage.
 
 ## Output, UI, privacy, and cost
 
@@ -118,7 +139,7 @@ Markdown is capped at configured line/byte limits; a notice is appended after tr
 
 All web content is untrusted. Safety/citation instructions are shared across providers and appear before excerpts; this is guidance, not prompt-injection sanitization. HTTP(S) validation blocks embedded credentials and other protocols, but is **not a comprehensive private-network/SSRF filter**. Requests do not forward credentials through HTTP redirects.
 
-Provider-reported token usage and cost are forwarded to Pi when available. Total API cost is authoritative; unknown per-category allocation is not fabricated. Pi's numeric usage fields require zero placeholders for unavailable categories, whereas structured metadata retains null for unknown total cost. Parser/transport failures before a normalized response can lack accounting even if a remote request was billed.
+Retrieval usage and classifier usage are combined and forwarded to Pi when available. Jev costs come from Pi's classifier usage accounting (catalog pricing); combined `metadata.cost_usd` stays null if either stage's cost is unknown. Unknown per-category allocation is not fabricated. Pi's numeric usage fields require zero placeholders for unavailable categories, whereas structured metadata retains null for unknown total cost. Parser/transport failures before a normalized response can lack accounting even if a remote request was billed.
 
 ## Layout and adding providers
 
@@ -137,7 +158,7 @@ providers/           Provider registry + isolated adapters
 tests/               Offline contract, adapter, transport, UI and selection tests
 ```
 
-Implement `WebProvider` (`validate`, `search`, `fetch`) and register it in `providers/index.ts`. Add its ID to the contract/output schema, configuration/comments, and shared contract tests. Both operations are mandatory; capabilities declare optional controls. Adapters receive only cancellation and a narrow credential resolver—not the Pi conversation or tool API. Adapters return normalized data/usage; they never register Pi tools, format final Markdown, or render UI. Provider-internal prompts remain in adapters because direct APIs and model-mediated retrieval need different instructions.
+Implement `WebProvider` (`validate`, `search`, `fetch`) and register it in `providers/index.ts`. Add its ID to the contract/output schema, configuration/comments, and shared contract tests. Both operations are mandatory; capabilities declare optional controls. Adapters receive cancellation, a narrow credential resolver, and an OpenRouter classifier callback—not the Pi conversation or tool API. Adapters return normalized data/usage; they never register Pi tools, format final Markdown, or render UI. Provider-internal prompts remain in adapters because direct APIs and model-mediated retrieval need different instructions.
 
 ## Migration / installation
 
@@ -167,7 +188,7 @@ WEB_TOOLS_LIVE_TEST=1 WEB_TOOLS_TEST_EVIDENCE=/tmp/web-tools-live.json \
   npm run test:web-tools:live -- openrouter
 ```
 
-The live script uses registered shared tools and the same credential resolution as the extension. Each invocation makes two searches and one fetch. Live API compatibility/quality is not established by offline tests.
+The live script uses registered shared tools and the same credential resolution as the extension. Each invocation makes two searches and one fetch; OpenRouter searches also make a Jev classification request. The smoke test requires successful ranking, nonempty excerpts, and no generated search report. Live API compatibility/quality is not established by offline tests.
 
 API references for engine settings:
 - https://openrouter.ai/docs/guides/features/server-tools/web-search

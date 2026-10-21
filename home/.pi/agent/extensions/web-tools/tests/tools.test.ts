@@ -19,7 +19,21 @@ const theme = { fg: (_color, text) => text, bold: text => text };
 const context = { modelRegistry: { async getApiKeyForProvider(provider) {
   assert.equal(provider, 'openrouter');
   return 'offline-registry-key';
-} } };
+},
+  findOfType(type, provider, id) {
+    assert.equal(type, 'classifier'); assert.equal(provider, 'openrouter');
+    return { id, provider };
+  },
+  async classify(model, input, options) {
+    assert.equal(options.apiKey, 'offline-registry-key');
+    assert.ok(options.signal instanceof AbortSignal);
+    return { stopReason: 'stop',
+      answers: Object.fromEntries(Object.keys(input.questions).map(id => [id, { type: 'score', score: 3, confidence: 1 }])),
+      usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    };
+  },
+} };
 
 beforeEach(t => {
   t.mock.method(globalThis, 'fetch', async () => assert.fail('Unexpected HTTP: tests must stay offline'));
@@ -128,9 +142,9 @@ for (const provider of ['openrouter', 'perplexity']) {
     assert.equal(search.status, 'ok');
     assert.deepEqual(search.results, search.sources);
     assert.equal(search.sources[0].snippet, excerpt);
-    assert.equal(search.report, provider === 'openrouter' ? report : null);
-    assert.equal(search.metadata.result_order, provider === 'openrouter' ? 'citation' : 'ranked');
-    assert.match(rendered(defaultSearch), provider === 'openrouter' ? /1 source citation\(s\)/ : /1 ranked result\(s\)/);
+    assert.equal(search.report, null);
+    assert.equal(search.metadata.result_order, 'ranked');
+    assert.match(rendered(defaultSearch), /1 ranked result\(s\)/);
     assert.equal(defaultSearch.usage.output, 40);
     assert.equal(defaultSearch.usage.input, provider === 'openrouter' ? 70 : 100);
     assert.equal(defaultSearch.usage.totalTokens, 140);
@@ -300,13 +314,13 @@ test('renderers cover success, report-only, not_found, errors, missing details, 
   mockRequests(t, () => payload);
   const { run, tools } = harness();
   const success = await run('web_search', { query: 'render query' });
-  assert.match(rendered(success), /\[openrouter\] 1 source citation\(s\)/);
+  assert.match(rendered(success), /\[openrouter\] 1 ranked result\(s\)/);
   assert.doesNotMatch(rendered(success), /Test page/);
   const expanded = rendered(success, true);
   for (const text of ['render query', 'Test page', url, 'Evidence: tool_execution', 'Model: test/model', 'Server tool calls: 1', 'API cost: $0.012300']) assert.ok(expanded.includes(text));
   assert.match(rendered(await run('web_fetch', { url })), /Retrieved Test page/);
   payload = fixture('openrouter', 'search', []);
-  assert.match(rendered(await run('web_search', { query: 'q' })), /0 source citation\(s\) \(model report only\)/);
+  assert.match(rendered(await run('web_search', { query: 'q' })), /Web retrieval failed/);
   const reportOnly = await run('web_fetch', { url });
   assert.match(rendered(reportOnly), /Model report only; no matching provider excerpt/);
   assert.equal(reportOnly.structuredContent.content, null);
@@ -316,7 +330,7 @@ test('renderers cover success, report-only, not_found, errors, missing details, 
     checked(output, 'search', 'openrouter');
     assert.equal(output.isError, status === 'error');
     assert.match(rendered(output), status === 'error' ? /Web retrieval failed/ : /No relevant content found/);
-    assert.ok(rendered(output, true).includes(report));
+    assert.ok(!rendered(output, true).includes(report));
   }
   assert.match(rendered({}), /Web retrieval failed/);
   assert.match(rendered({ details: { operation: 'fetch', provider: 'perplexity' } }, false, true), /Fetching with perplexity/);
@@ -352,6 +366,101 @@ test('each in-flight call snapshots its provider, usage, progress, and historica
   assert.equal(updates[0].details.provider, 'openrouter');
   assert.match(rendered(first, true), /\[openrouter\]/);
   assert.deepEqual(requests.map(r => [r.provider, r.operation]), [['openrouter', 'search'], ['perplexity', 'fetch'], ['perplexity', 'search']]);
+});
+
+test('Sol status-only search, Jev selection, original evidence output, and combined accounting end to end', async t => {
+  const originals = [
+    source('https://example.com/a', '  Exact\r\nUnicode café 雪\t '),
+    source('https://example.com/b', 'Unrelated material'),
+    source('https://example.com/c', 'Direct evidence\nwith [links](https://example.com)'),
+  ];
+  mockRequests(t, () => {
+    const data = fixture('openrouter', 'search', originals);
+    data.choices[0].message.content = '{"status":"ok"}';
+    return data;
+  });
+  const classifier = t.mock.method(context.modelRegistry, 'classify', async (model, input, options) => {
+    assert.equal(model.id, config.openrouter.ranking.model);
+    assert.equal(options.apiKey, 'offline-registry-key');
+    assert.equal(options.maxRetries, 0);
+    assert.equal(input.state.query, 'focused query');
+    assert.deepEqual(input.state.results.map(r => r.snippet), originals.map(r => r.snippet));
+    return { stopReason: 'stop', answers: {
+      result_0: { type: 'score', score: 2 }, result_1: { type: 'score', score: 0.1 },
+      result_2: { type: 'score', score: 3 },
+    }, usage: { input: 10, output: 2, cacheRead: 1, cacheWrite: 0, totalTokens: 13,
+      cost: { input: 0.001, output: 0, cacheRead: 0, cacheWrite: 0, total: 0.001 } } };
+  });
+  const output = await harness().run('web_search', { query: 'focused query' });
+  const result = checked(output, 'search', 'openrouter');
+  assert.equal(classifier.mock.callCount(), 1);
+  assert.deepEqual(result.sources.map(s => s.snippet), [originals[2].snippet, originals[0].snippet]);
+  assert.equal(result.report, null);
+  assert.equal(result.metadata.ranking.status, 'ranked');
+  assert.equal(result.metadata.ranking.candidates, 3);
+  assert.equal(result.metadata.ranking.selected, 2);
+  assert.equal(output.usage.input, 80);
+  assert.equal(output.usage.output, 42);
+  assert.equal(output.usage.totalTokens, 153);
+  assert.equal(output.usage.cost.total, 0.0123 + 0.001);
+  assert.equal(result.metadata.cost_usd, output.usage.cost.total);
+  for (const snippet of [originals[2].snippet, originals[0].snippet]) assert.ok(output.content[0].text.includes(snippet));
+  assert.doesNotMatch(output.content[0].text, /Unrelated material|Model-written retrieval report/);
+  assert.doesNotMatch(JSON.stringify(output), /offline-registry-key/);
+});
+
+test('search ranking failure is explicit, no report is substituted, and missing cost remains unknown', async t => {
+  mockRequests(t);
+  t.mock.method(context.modelRegistry, 'classify', async () => { throw new Error('private-key'); });
+  const output = await harness().run('web_search', { query: 'q' });
+  const result = checked(output, 'search', 'openrouter');
+  assert.equal(result.status, 'ok');
+  assert.equal(result.metadata.ranking.status, 'fallback');
+  assert.equal(result.metadata.result_order, 'citation');
+  assert.equal(result.metadata.cost_usd, null);
+  assert.equal(result.report, null);
+  assert.equal(result.sources[0].snippet, excerpt);
+  assert.ok(result.warnings.some(w => /ranking unavailable/.test(w)));
+  assert.doesNotMatch(JSON.stringify(output), /private-key/);
+});
+
+test('cancellation during Jev ranking retains completed retrieval usage', async t => {
+  mockRequests(t);
+  const controller = new AbortController();
+  t.mock.method(context.modelRegistry, 'classify', async (_model, _input, options) => {
+    controller.abort();
+    assert.equal(options.signal.aborted, true);
+    return { stopReason: 'aborted', answers: {} };
+  });
+  const output = await harness().run('web_search', { query: 'q' }, controller.signal);
+  const result = checked(output, 'search', 'openrouter');
+  assert.equal(result.status, 'error');
+  assert.equal(result.error.code, 'cancelled');
+  assert.deepEqual(result.sources, []);
+  assert.equal(result.report, null);
+  assert.equal(output.usage.totalTokens, 140);
+  assert.equal(output.usage.cost.total, 0.0123);
+  assert.equal(result.metadata.cost_usd, null);
+});
+
+test('all low scores produce not_found; no excerpts produce error without classifying or leaking Sol prose', async t => {
+  let sources = [source()];
+  mockRequests(t, () => fixture('openrouter', 'search', sources));
+  const classify = t.mock.method(context.modelRegistry, 'classify', async () => ({
+    stopReason: 'stop', answers: { result_0: { type: 'score', score: 0 } },
+  }));
+  const { run } = harness();
+  const low = checked(await run('web_search', { query: 'q' }), 'search', 'openrouter');
+  assert.equal(low.status, 'not_found');
+  assert.deepEqual(low.sources, []);
+  assert.equal(low.error, null);
+  assert.equal(classify.mock.callCount(), 1);
+  sources = [];
+  const missing = await run('web_search', { query: 'q' });
+  assert.equal(checked(missing, 'search', 'openrouter').error.code, 'retrieval_failed');
+  assert.equal(classify.mock.callCount(), 1);
+  assert.equal(missing.structuredContent.report, null);
+  assert.doesNotMatch(missing.content[0].text, /MODEL report/);
 });
 
 test('invalid shared defaults fail locally during registration', () => {

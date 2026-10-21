@@ -38,6 +38,13 @@ for (const item of cases) {
   if (item.tool === 'web_search') {
     assert.ok(result.results.length > 0);
     assert.deepEqual(result.results, result.sources);
+    if (id === 'openrouter') {
+      assert.equal(result.report, null);
+      assert.equal(result.metadata.ranking.status, 'ranked', result.warnings.join('\n'));
+      assert.equal(result.metadata.ranking.model, config.openrouter.ranking.model);
+      assert.ok(result.sources.every(source => source.snippet?.trim()));
+      assert.ok(result.sources.length <= Math.min(item.args.max_results ?? config.search.maxResults, config.openrouter.ranking.maxResults));
+    }
   } else if (result.content !== null) {
     assert.equal(result.source_url, result.url);
   }

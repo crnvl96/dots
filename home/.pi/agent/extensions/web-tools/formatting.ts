@@ -11,7 +11,12 @@ export function formatResult(result: RetrievalResult): string {
   const parts = [untrustedWarning, '', `# Web ${result.operation}`, `Provider: ${result.provider ?? 'not selected'}`, `Input: ${input}`, `Status: ${result.status}`];
   if (result.error) parts.push(`Error (${result.error.code}): ${result.error.message}`);
   for (const warning of result.warnings) parts.push(`Warning: ${warning}`);
-  parts.push(`Retrieval evidence: ${result.metadata.retrieval_evidence}`, `Source order: ${result.metadata.result_order}`, '', '## Provider source excerpts');
+  parts.push(`Retrieval evidence: ${result.metadata.retrieval_evidence}`, `Source order: ${result.metadata.result_order}`);
+  if (result.metadata.ranking) {
+    const ranking = result.metadata.ranking;
+    parts.push(`Relevance selection: ${ranking.model} (${ranking.status}; ${ranking.selected}/${ranking.candidates} excerpts selected)`);
+  }
+  parts.push('', '## Provider source excerpts');
   if (!result.sources.length) parts.push('No provider source excerpts returned.');
   for (const [i, source] of result.sources.entries()) {
     parts.push(`### ${i + 1}. ${source.title}`, `URL: ${source.url}`);

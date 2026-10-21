@@ -1,4 +1,4 @@
-import type { Usage } from '@earendil-works/pi-ai';
+import type { ClassifierContext, ClassifierResult, Usage } from '@earendil-works/pi-ai';
 
 export type ProviderId = 'openrouter' | 'perplexity';
 export type Operation = 'search' | 'fetch';
@@ -16,6 +16,7 @@ export interface FetchInput { url: string; objective: string }
 export interface ProviderContext {
   signal?: AbortSignal;
   getApiKey(provider: string): Promise<string | undefined>;
+  classify?(model: string, input: ClassifierContext, options: { apiKey: string; signal?: AbortSignal }): Promise<ClassifierResult>;
 }
 export type Source = {
   title: string;
@@ -24,7 +25,15 @@ export type Source = {
   date: string | null;
   last_updated: string | null;
 };
+export type Ranking = {
+  model: string;
+  status: 'ranked' | 'fallback';
+  candidates: number;
+  selected: number;
+  scores: { url: string; score: number }[];
+};
 export type Metadata = {
+  ranking?: Ranking;
   result_order: 'ranked' | 'citation' | 'unknown';
   retrieval_evidence: 'direct_response' | 'tool_result' | 'tool_execution' | 'none';
   model: string | null;

@@ -30,6 +30,11 @@ const common = {
   sources: Type.Array(SourceSchema),
   report: Type.Union([Type.String(), Type.Null()], { description: 'Separate model-written report/notes, not guaranteed verbatim page text.' }),
   metadata: Type.Object({
+    ranking: Type.Optional(Type.Object({
+      model: Type.String(), status: Type.Union([Type.Literal('ranked'), Type.Literal('fallback')]),
+      candidates: Type.Integer(), selected: Type.Integer(),
+      scores: Type.Array(Type.Object({ url: Type.String(), score: Type.Number() })),
+    })),
     result_order: Type.Union([Type.Literal('ranked'), Type.Literal('citation'), Type.Literal('unknown')]),
     retrieval_evidence: Type.Union(['direct_response', 'tool_result', 'tool_execution', 'none'].map(value => Type.Literal(value))),
     model: NullableString, request_id: NullableString, tool_calls: NullableNumber, cost_usd: NullableNumber,

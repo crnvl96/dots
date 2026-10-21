@@ -11,7 +11,14 @@ import { FetchOutputSchema, FetchParams, SearchOutputSchema, SearchParams, type 
 import { normalizeUrl, positiveInteger } from './transport.ts';
 
 export function providerContext(ctx: Pick<ExtensionContext, 'modelRegistry'>, signal?: AbortSignal): ProviderContext {
-  return { signal, getApiKey: provider => ctx.modelRegistry.getApiKeyForProvider(provider) };
+  return {
+    signal, getApiKey: provider => ctx.modelRegistry.getApiKeyForProvider(provider),
+    async classify(id, input, options) {
+      const model = ctx.modelRegistry.findOfType('classifier', 'openrouter', id);
+      if (!model) throw new WebToolsError('configuration', 'OpenRouter ranking model is not in the classifier catalog.');
+      return ctx.modelRegistry.classify(model, input, { ...options, maxRetries: 0 });
+    },
+  };
 }
 export function validateCommonConfig(settings: WebToolsConfig): void {
   positiveInteger(settings.output.maxLines, 'output.maxLines');

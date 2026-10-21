@@ -36,6 +36,10 @@ export function renderResult(
     for (const warning of result.warnings) text += `\n${theme.fg('warning', warning)}`;
     if ((failed || missing) && result.report) text += `\n${theme.fg('muted', result.report)}`;
     text += `\n${theme.fg('dim', `Evidence: ${result.metadata.retrieval_evidence}`)}`;
+    if (result.metadata.ranking) {
+      const ranking = result.metadata.ranking;
+      text += `\n${theme.fg('dim', `Relevance: ${ranking.model} (${ranking.status}; ${ranking.selected}/${ranking.candidates} selected)`)}`;
+    }
     if (result.metadata.model) text += `\n${theme.fg('dim', `Model: ${result.metadata.model}`)}`;
     if (result.metadata.tool_calls !== null) text += `\n${theme.fg('dim', `Server tool calls: ${result.metadata.tool_calls}`)}`;
     if (result.metadata.cost_usd !== null) text += `\n${theme.fg('dim', `API cost: $${result.metadata.cost_usd.toFixed(6)}`)}`;

@@ -29,6 +29,7 @@ export interface WebToolsConfig {
       engine: 'parallel' | 'exa' | 'perplexity';
       mode: 'turbo' | 'fast' | 'basic' | 'advanced' | 'instant' | 'auto' | 'deep-lite' | 'deep' | 'deep-reasoning';
     };
+    ranking: { model: string; maxResults: number; minScore: number; timeoutMs: number };
     fetch: { engine: 'parallel' | 'exa' | 'openrouter' | 'firecrawl'; maxContentTokens: number };
   };
   perplexity: {
@@ -90,6 +91,17 @@ export const config: WebToolsConfig = {
       // Exa: 'instant' | 'fast' | 'auto' | 'deep-lite' | 'deep' | 'deep-reasoning'.
       // Perplexity: ignored and NOT sent. Invalid engine/mode pairs fail locally.
       mode: 'advanced',
+    },
+    // Search only: Sol retrieves, Jev scores, code selects original excerpts.
+    ranking: {
+      // OpenRouter classifier ID; uses the SAME resolved OpenRouter credential.
+      model: 'typesafe/jev-1.13',
+      // Return at most this many results, also bounded by the call's max_results.
+      maxResults: 5,
+      // Expected relevance on a 0–3 scale; 0 unrelated, 3 directly useful.
+      minScore: 1.5,
+      // Classification deadline. Failure returns citation-order excerpts + warning.
+      timeoutMs: 30_000,
     },
     fetch: {
       // Options: 'parallel', 'exa', 'openrouter', 'firecrawl'. Explicit external
