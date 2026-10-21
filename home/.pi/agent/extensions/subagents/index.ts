@@ -27,7 +27,7 @@ const Task = Type.Object({
   provider: Type.Optional(Type.String({ minLength: 1, description: 'Defaults to the parent provider.' })),
   thinkingLevel: Type.Optional(StringEnum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)),
   tools: Type.Optional(Type.Array(Type.String({ minLength: 1 }), {
-    description: 'Exact parent-callable tool names. Defaults to active callable tools, excluding subagent tools. [] disables tools.',
+    description: 'Exact parent-callable tool names. Defaults to all parent-callable tools, including codemode/deferred tools, excluding subagent tools. [] disables tools.',
     uniqueItems: true,
   })),
   systemPrompt: Type.Optional(Type.String({ description: 'Replaces the general-purpose system prompt.' })),
@@ -787,8 +787,9 @@ export default function subagentsExtension(pi: ExtensionAPI) {
         if (batchNames.has(task.name) || usedNames.has(task.name)) throw new Error(`Subagent name already used in this session or batch: ${task.name}`);
         batchNames.add(task.name);
       }
-      const activeTools = new Set(pi.getActiveTools());
-      const defaultTools = ctx.tools.filter((tool) => activeTools.has(tool.name) && !OWN_TOOLS.has(tool.name)).map((tool) => tool.name);
+      // Active tools are model declarations, not the full callable set: codemode
+      // and deferred tools can be callable without being active in the parent.
+      const defaultTools = ctx.tools.filter((tool) => !OWN_TOOLS.has(tool.name)).map((tool) => tool.name);
       const prepared: Job[] = params.tasks.map((task) => {
         const agent = prepare(task, ctx, ctx.thinkingLevel ?? pi.getThinkingLevel(), defaultTools);
         return {

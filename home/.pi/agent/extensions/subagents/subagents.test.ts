@@ -482,7 +482,7 @@ test('passes model, provider, thinking, exact tools, system prompt and prompt to
   await until(() => h.notifications.length === 1);
 });
 
-test('inherits model/thinking and active callable tools, without leaking inactive sibling tools or parent history', async (t) => {
+test('inherits model/thinking and all callable tools, without orchestration tools or parent history', async (t) => {
   const h = harness(t);
   await h.launch([{ prompt: 'default task' }, { prompt: 'explicit task', tools: ['perplexity_search'] }]);
   await until(() => h.requests.length === 2);
@@ -490,10 +490,34 @@ test('inherits model/thinking and active callable tools, without leaking inactiv
   assert.equal(request.model, parentModel);
   assert.equal(request.options.reasoning, 'medium');
   assert.match(system(request).content, /general-purpose subagent/);
-  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['read']);
+  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['read', 'perplexity_search']);
   assert.deepEqual(userTexts(request), ['default task']);
   h.requests.forEach((request) => request.finish());
   await until(() => h.notifications.length === 2);
+});
+
+test('bash-only active loadout still inherits and executes callable file, web, and MCP tools', async (t) => {
+  const h = harness(t);
+  h.active.splice(0, h.active.length, 'bash', 'codemode', 'subagents_launch');
+  const names = ['bash', 'read', 'edit', 'write', 'openrouter_web_search', 'mcp__example__search'];
+  const template = h.ctx.tools[0];
+  h.ctx.tools = [
+    ...names.map(name => ({ ...template, name, label: name, description: name })),
+    ...h.ctx.tools.filter(tool => tool.name.startsWith('subagents_')),
+  ];
+  await h.launch([{ prompt: 'use every callable tool' }]);
+  await until(() => h.requests.length === 1);
+  assert.deepEqual(system(h.requests[0]).toolsAdded.map(tool => tool.name), names);
+  h.requests[0].finish('', 'toolUse', {
+    content: names.map((name, i) => ({
+      type: 'toolCall', id: `child-tool-${i}`, name, arguments: { path: 'example.ts' },
+    })),
+  });
+  await until(() => h.requests.length === 2);
+  assert.deepEqual(h.nested.map(call => call.name).sort(), [...names].sort());
+  assert.ok(h.nested.every(call => call.options.signal === h.requests[0].options.signal));
+  h.requests[1].finish('all tools reached parent hooks');
+  await until(() => h.notifications.length === 1);
 });
 
 test('explicit empty tools and empty system prompt are respected; thinking falls back to pi', async (t) => {

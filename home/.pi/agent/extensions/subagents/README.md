@@ -58,7 +58,7 @@ Each task supports:
 | `model` | Parent model ID. Must resolve with the selected provider. |
 | `provider` | Parent provider. |
 | `thinkingLevel` | Parent context's thinking level, falling back to Pi's current setting. Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Provider/model support still applies. |
-| `tools` | Active parent-callable tools, excluding this extension's orchestration tools. Supply exact names to choose a subset; `[]` disables tools. Explicit tools must be callable in the parent's context. |
+| `tools` | All parent-callable tools at launch (including codemode/deferred tools), excluding this extension's orchestration tools. Supply exact names to choose a subset; `[]` disables tools. Explicit tools must be callable in the parent's context. |
 | `systemPrompt` | General-purpose subagent instructions. A supplied value replaces these instructions; an explicit empty string is respected. |
 
 The entire batch is validated before any child starts, including missing/invalid names and duplicate names within the batch or session. A rejected batch reserves no names. Children then run concurrently with separate names and Agent instances.
@@ -70,6 +70,8 @@ Names stay reserved until session cleanup so stale tool calls or queued notifica
 There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
 
 A child does **not** inherit the parent conversation, parent system prompt, or project instructions automatically. Include the task context, relevant file paths, constraints, expected output, and any required instructions in its prompt. File ownership should be explicit when children can edit the same workspace.
+
+The default comes from `ctx.tools`, not the parent's active model declarations. Callable tools are declared directly to the child even when the parent accesses them through codemode. Hidden, model-only, and otherwise non-callable tools are not inherited.
 
 Child tools call `ctx.executeTool()` so Pi's validation, permission hooks, and tool-result handling still apply. Tool selection is **not a security sandbox**: for example, `bash` can access the workspace and tools that orchestrate other tools can have broader reach. Subagent orchestration tools are excluded from direct child tool selection; this is not a security boundary against indirect orchestration.
 
