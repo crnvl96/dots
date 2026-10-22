@@ -62,6 +62,13 @@ function hardExitExtension(clear: { run: () => void }, hardExit: { hit: boolean 
   };
 }
 
+/** Parent effective prompt, then the child appendix, then an optional task append. Never a replacement. */
+export function resolveChildSystemPrompt(task: TaskInput, ctx: ExtensionToolContext): string | undefined {
+  const parent = ctx.getSystemPrompt?.();
+  if (parent === undefined) return undefined;
+  return [parent, childPromptAppendix, task.appendSystemPrompt?.trim()].filter(Boolean).join('\n\n');
+}
+
 export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
   const provider = task.provider ?? ctx.model?.provider;
   const modelId = task.model ?? ctx.model?.id;
@@ -74,7 +81,7 @@ export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
 export async function openChildSession(input: OpenChildInput): Promise<OpenedChild> {
   const host = input.ctx as HostContext;
   const task = input.task;
-  if (task.systemPrompt === undefined && !task.prompt.trim()) throw new Error('Subagent prompt must not be blank.');
+  if (!task.prompt.trim()) throw new Error('Subagent prompt must not be blank.');
   const model = resolveModel(task, input.ctx);
   const agentDir = host.agentDir || getAgentDir();
   const settings = input.pi.getSettings?.() ?? {};
@@ -89,6 +96,7 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     : task.tools.length === 0 ? []
       : [...new Set([...task.tools, config.askTool])];
   const isolated = Boolean(host.agentDir);
+  const forcedPrompt = resolveChildSystemPrompt(task, input.ctx);
   const resourceLoader = new DefaultResourceLoader({
     cwd: input.ctx.cwd,
     agentDir,
@@ -103,15 +111,16 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
       ...(isolated ? [] : [createMcpExtension()]),
       hardExitExtension(clear, hardExit),
       (pi) => { if (explicitTools === undefined || explicitTools.includes(config.askTool)) pi.registerTool(asked); },
-      (pi) => {
-        if (task.systemPrompt === undefined) return;
-        pi.on('before_agent_start', () => ({ systemPrompt: task.systemPrompt }));
-      },
       ...(host.extensionFactories ?? []),
+      // After inherited extensions so a rebuilt child prompt cannot replace the parent's text.
+      (pi) => {
+        if (forcedPrompt === undefined) return;
+        pi.on('before_agent_start', () => ({ systemPrompt: forcedPrompt }));
+      },
     ],
-    ...(task.systemPrompt !== undefined
-      ? { systemPromptOverride: () => task.systemPrompt }
-      : { appendSystemPrompt: [childPromptAppendix] }),
+    ...(forcedPrompt !== undefined
+      ? { systemPromptOverride: () => forcedPrompt }
+      : { appendSystemPrompt: [childPromptAppendix, task.appendSystemPrompt?.trim()].filter((part): part is string => Boolean(part)) }),
   });
   await resourceLoader.reload();
   const { session } = await createAgentSession({

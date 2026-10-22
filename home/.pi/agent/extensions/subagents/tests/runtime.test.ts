@@ -87,6 +87,7 @@ function harness(t, mode = 'print', renderer) {
     agentDir: directory,
     model: parentModel,
     thinkingLevel: 'medium',
+    getSystemPrompt: () => 'Parent effective system prompt',
     isProjectTrusted: () => true,
     tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'].map((name) => ({
       name, label: name, description: name, parameters: schema,
@@ -486,13 +487,14 @@ test('passes model, provider, thinking, exact tools, system prompt and prompt to
   const h = harness(t);
   await h.launch([{
     prompt: 'my task', provider: childModel.provider, model: childModel.id,
-    thinkingLevel: 'high', tools: ['read'], systemPrompt: 'Custom system instructions',
+    thinkingLevel: 'high', tools: ['read'], appendSystemPrompt: 'Custom system instructions',
   }]);
   await until(() => h.requests.length === 1);
   const request = h.requests[0];
   assert.equal(request.model, childModel);
   assert.equal(request.options.reasoning, 'high');
-  assert.match(system(request).content, /^Custom system instructions/);
+  assert.match(system(request).content, /^Parent effective system prompt/);
+  assert.match(system(request).content, /Custom system instructions$/);
   assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name).sort(), ['read', 'subagents_ask']);
   assert.deepEqual(userTexts(request), ['my task']);
   request.finish('custom answer');
@@ -506,6 +508,7 @@ test('inherits model/thinking and all callable tools, without orchestration tool
   const request = h.requests[0];
   assert.equal(request.model, parentModel);
   assert.equal(request.options.reasoning, 'medium');
+  assert.match(system(request).content, /^Parent effective system prompt/);
   assert.match(system(request).content, /child Pi session/);
   assert.match(system(request).content, /do not inherit its conversation history/i);
   assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('read'));
@@ -544,15 +547,16 @@ test('child sessions execute extension and MCP-named tools themselves, independe
   await until(() => h.notifications.length === 1);
 });
 
-test('explicit empty tools and empty system prompt are respected; thinking falls back to pi', async (t) => {
+test('explicit empty tools are respected and an empty append does not replace the parent prompt; thinking falls back to pi', async (t) => {
   const h = harness(t);
   delete h.ctx.thinkingLevel;
-  await h.launch([{ prompt: 'no tools', tools: [], thinkingLevel: 'off', systemPrompt: '' }, { prompt: 'fallback' }]);
+  await h.launch([{ prompt: 'no tools', tools: [], thinkingLevel: 'off', appendSystemPrompt: '   ' }, { prompt: 'fallback' }]);
   await until(() => h.requests.length === 2);
   const empty = h.requests.find((request) => userTexts(request).includes('no tools'));
   const fallback = h.requests.find((request) => userTexts(request).includes('fallback'));
   assert.deepEqual(system(empty).toolsAdded ?? [], []);
-  assert.equal(system(empty).content, '');
+  assert.match(system(empty).content, /^Parent effective system prompt/);
+  assert.doesNotMatch(system(empty).content, /Custom system instructions/);
   assert.equal(empty.options.reasoning, undefined); // Agent maps off to no reasoning.
   assert.equal(fallback.options.reasoning, 'low');
 });

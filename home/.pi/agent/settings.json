@@ -6,7 +6,6 @@
   "theme": "system",
   "hideThinkingBlock": true,
   "editorPaddingX": 1,
-  "hideThinkingBlock": true,
   "collapseChangelog": true,
   "tuiMode": "fullscreen",
   "doubleEscapeAction": "tree",
@@ -17,7 +16,9 @@
     "+codemode"
   ],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
-  "packages": [],
+  "packages": [
+    "npm:@plannotator/pi-extension"
+  ],
   "extensions": [],
   "enabledModels": [
     "openai/gpt-5.6-luna",

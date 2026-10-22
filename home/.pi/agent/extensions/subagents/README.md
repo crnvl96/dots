@@ -59,7 +59,7 @@ Each task supports:
 | `provider` | Parent provider. |
 | `thinkingLevel` | Parent context's thinking level, falling back to Pi's current setting. Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Provider/model support still applies. |
 | `tools` | The same tool set a new Pi session would have: built-ins, extension tools, codemode, and MCP. Supply exact names to choose a subset; `[]` disables tools. `subagents_ask` stays available unless the list is empty. |
-| `systemPrompt` | General-purpose subagent instructions. A supplied value replaces these instructions; an explicit empty string is respected. |
+| `appendSystemPrompt` | Extra text appended after the parent session's effective system prompt and the child-only appendix. It does not replace the parent prompt. An empty string is ignored. |
 
 The entire batch is validated before any child starts, including missing/invalid names and duplicate names within the batch or session. A rejected batch reserves no names. Children then run concurrently with separate names and Agent instances.
 
@@ -69,7 +69,7 @@ Names stay reserved until session cleanup so stale tool calls or queued notifica
 
 There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
 
-A child does **not** inherit the parent conversation. It does inherit the parent model, thinking level, Pi settings, tools, extensions, and MCP servers unless the task overrides them. It is a separate in-memory Pi session in the same workspace. File ownership should be explicit when children can edit the same files.
+A child does **not** inherit the parent conversation. It always receives the parent session's effective system prompt. It inherits the parent model, thinking level, Pi settings, tools, extensions, and MCP servers unless the task overrides those. `appendSystemPrompt` adds text after that prompt; it cannot replace it. It is a separate in-memory Pi session in the same workspace. File ownership should be explicit when children can edit the same files.
 
 The default comes from `ctx.tools`, not the parent's active model declarations. Callable tools are declared directly to the child even when the parent accesses them through codemode. Hidden, model-only, and otherwise non-callable tools are not inherited.
 

@@ -17,7 +17,9 @@ export const TaskSchema = Type.Object({
     description: 'Exact tool names to enable. Defaults to the same Pi tool set as the parent, including extension, MCP, and codemode tools. [] disables tools. subagents_ask stays available unless the list is empty.',
     uniqueItems: true,
   })),
-  systemPrompt: Type.Optional(Type.String({ description: 'Replaces the child system prompt, including project instructions. Omit to inherit the normal Pi prompt.' })),
+  appendSystemPrompt: Type.Optional(Type.String({
+    description: 'Text appended after the parent session\'s effective system prompt. Does not replace it. An empty string is ignored.',
+  })),
 });
 
 export const LaunchSchema = Type.Object({ tasks: Type.Array(TaskSchema, { minItems: 1 }) });

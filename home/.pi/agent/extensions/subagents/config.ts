@@ -14,7 +14,7 @@ export const config = {
   askTool: 'subagents_ask',
   /**
    * Background children do not warm a second prompt cache. Everything else in the parent
-   * settings object is copied unless a task overrides model, thinking, tools, or system prompt.
+   * settings object is copied unless a task overrides model, thinking, or tools. The system prompt is always the parent's.
    */
   childCacheWarming: 'off' as const,
 };

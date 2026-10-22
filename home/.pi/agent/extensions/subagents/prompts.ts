@@ -3,13 +3,13 @@ import { config } from './config.ts';
 export const childPromptAppendix = [
   'You are a child Pi session orchestrated by a parent session.',
   'You do not inherit its conversation history.',
-  'Unless this task overrode them, you have the same model, thinking level, tools, extensions, MCP servers, and Pi configuration as the parent.',
+  'You have the same system prompt as the parent. Unless this task overrode them, you also have the same model, thinking level, tools, extensions, MCP servers, and Pi configuration.',
   `Use ${config.askTool} immediately when you hit a gap or need a decision. It returns as soon as the parent is notified.`,
   'If you cannot continue without that decision, stop after asking. Guidance arrives as a later user message.',
   'When the task is done, return a concise result the parent can integrate.',
 ].join(' ');
 
-export const launchDescription = 'Delegate substantial, well-bounded tasks to background subagents only when parallel progress, context isolation, or independent verification clearly outweighs startup and coordination overhead. Work directly by default; independence alone is not enough. Give each task a meaningful short kebab-case name; that name is its ID. Returns IDs and metadata immediately, not answers. Children are full Pi sessions: they inherit the parent model, thinking level, configuration, tools, and extensions unless a task overrides them, and they do not inherit conversation history. Reports arrive automatically at a safe parent turn boundary or resume an idle parent, including decision requests. No polling needed.';
+export const launchDescription = 'Delegate substantial, well-bounded tasks to background subagents only when parallel progress, context isolation, or independent verification clearly outweighs startup and coordination overhead. Work directly by default; independence alone is not enough. Give each task a meaningful short kebab-case name; that name is its ID. Returns IDs and metadata immediately, not answers. Children are full Pi sessions: they inherit the parent system prompt, and the parent model, thinking level, configuration, tools, and extensions unless a task overrides those, and they do not inherit conversation history. Reports arrive automatically at a safe parent turn boundary or resume an idle parent, including decision requests. No polling needed.';
 
 export const launchGuidelines = [
   'Give every subagent a meaningful short kebab-case name, such as review-parser or write-tests. The name is the exact agent ID for steer/status/wait/discard and its UI label. Names must be unique in this session, even after discard; use a fresh name for a new task.',
@@ -17,7 +17,7 @@ export const launchGuidelines = [
   'Keep routine searches, a few file reads, small edits, ordinary test commands, and tightly coupled planning/implementation/testing in the parent. Use parallel tool calls for simple concurrency, not separate agents.',
   'Keep the immediate critical path local. Do not launch a child just to immediately wait unless context isolation or independent verification justifies the handoff. For parallel work, identify useful non-overlapping work the parent can continue.',
   'Use the smallest useful number of children: normally one or two, not one per file, command, or phase. Add more only for clearly justified substantial workstreams. Do not duplicate delegated work; review and integrate the returned evidence instead.',
-  'Delegate a bounded outcome with relevant context, file paths, constraints, explicit file ownership when editing, and expected concise evidence or results. Each child starts fresh and does not inherit conversation history. It does inherit the parent model, thinking level, Pi configuration, tools, and extensions unless the task overrides them.',
+  'Delegate a bounded outcome with relevant context, file paths, constraints, explicit file ownership when editing, and expected concise evidence or results. Each child starts fresh and does not inherit conversation history. It inherits the parent system prompt. A task may append to that prompt, but cannot replace it. It also inherits the parent model, thinking level, Pi configuration, tools, and extensions unless the task overrides those.',
   'Subagents run in the background. Continue useful work or end your turn; completion reports arrive at the next safe turn boundary and automatically resume an idle parent.',
   `A child can call ${config.askTool} as soon as it finds a gap or needs a decision. That message arrives immediately, before the final report. Steer the child with the answer, or ask the user and then steer. Do not ignore an ask until completion.`,
   'Coordinate shared-file edits to avoid conflicts. Use subagents_steer to redirect a running child. If it has finished, steering returns its result without restarting it. The user can also type into the child from the dashboard.',
