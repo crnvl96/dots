@@ -2,7 +2,7 @@
 
 An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
 
-Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. The rest of the folder is split the same way as `web-tools`: config, contracts, schemas, prompts, session, runtime, tools, dashboard, and tests.
+Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. `definitions.ts` discovers reusable agent definitions; `catalog.ts` advertises them to the parent. Session/runtime/tool modules handle launches, and the dashboard displays jobs.
 
 ## Delegation policy
 
@@ -22,13 +22,60 @@ These are **model-facing guidelines, not runtime limits**. Explicit launches sti
 
 | Tool | Purpose |
 | --- | --- |
-| `subagents_launch({ tasks })` | Start a batch of children and immediately return IDs and task metadata. |
+| `subagents_list({})` | Rescan named agent definitions and return names, descriptions, source paths, and validation diagnostics; not running jobs. |
+| `subagents_launch({ tasks })` | Start a batch of children, optionally using named definitions, and immediately return IDs and task metadata. |
 | `subagents_steer({ id, prompt })` | Queue guidance for a running child, or recover the result if it has already finished. |
 | `subagents_status({ id? })` | Inspect progress without waiting; an exact ID includes the available final report. |
 | `subagents_wait({ ids, timeoutMs? })` | Wait for all selected children and return their reports; an optional timeout returns current snapshots without stopping them. |
 | `subagents_discard({ ids })` | Release retained finished reports after reviewing and integrating them. |
 
 Completion reports arrive automatically. **Do not poll status in a loop.** Use status to diagnose a job or recover a report; use wait when the next step depends on one or more children's results.
+
+## Named agent definitions
+
+The extension discovers Markdown agent definitions automatically, advertises their names/descriptions in the parent's system prompt, and loads the selected body into the child's system prompt **in code**. The child does not have to read its definition file to acquire its role. Supporting skills/references linked from that body still need to be read as instructed.
+
+Discovery recursively scans:
+
+- User: `~/.agents/agents/` and `~/.claude/agents/`.
+- Trusted project: `.agents/agents/` and `.claude/agents/` from the working directory up to the nearest repository root (`.git` directory or worktree file). Outside a repository, only the working directory is scanned.
+
+Nearest project definitions override ancestor projects, which override user definitions. At each directory, `.agents` takes precedence over `.claude`. Symlinked files/directories are followed, canonical paths deduplicate aliases, and directory cycles are skipped. Filenames need not match the declared name. Duplicate names within one discovery root keep the first file in sorted traversal order and produce a diagnostic.
+
+Project definitions are skipped unless Pi reports the project trusted. The extension does not execute scripts or hooks while discovering files. It rescans at each parent turn, list call, and named launch, so additions, edits, and removals take effect without restarting. A launch snapshots its selected bodies; already-running children keep their original instructions.
+
+Example definition:
+
+```markdown
+---
+name: correctness-reviewer
+description: Review changed code for correctness and security defects.
+---
+Review only; do not modify files. Report verified findings with path:line evidence.
+```
+
+Supported frontmatter is `name`, `description`, and optional `model: inherit`. The body must be nonempty. Names are lowercase kebab-case starting with a letter, at most 64 characters. Definitions are limited to 128 KiB. The canonical source path and base directory are injected with the body so relative references resolve from the definition, not the reviewed workspace.
+
+This is Claude-style discovery, **not full Claude configuration compatibility**. Other frontmatter (including `tools`, `disallowedTools`, model aliases, `permissionMode`, hooks, and memory settings) rejects the definition with a diagnostic; it is never silently treated as enforced. Select model, provider, effort, and exact Pi tools through the existing launch fields. Definitions with a recognizable name but invalid settings block lower-priority definitions of that name. If malformed YAML or an unreadable file prevents name identification, the diagnostic explains that a lower-priority definition may still be available.
+
+Use `subagents_list` to inspect the current catalog and errors. Listing returns metadata, not full bodies. A missing/invalid requested type fails the whole launch batch before any child starts or job IDs are reserved. Generic tasks that omit `agent` behave as before.
+
+```json
+{
+  "tasks": [
+    {
+      "name": "review-parser",
+      "agent": "correctness-reviewer",
+      "prompt": "Review the uncommitted changes in src/parser.ts.",
+      "tools": ["read", "bash"]
+    }
+  ]
+}
+```
+
+`name` is the unique job ID; `agent` is the reusable definition's frontmatter name. Several jobs can use the same definition. Named jobs include `agentType` and `agentFile` in launch/status/wait snapshots. System-prompt order is the inherited parent prompt, the child-session instructions, the selected role, then the optional task append. This preserves the extension's parent-inheritance contract instead of replacing it with a standalone role prompt.
+
+Discovery and body loading are deterministic, but choosing a suitable named agent from its description is still a model decision. For a guaranteed selection, explicitly request that name or set `tasks[].agent` when calling the tool. No background review is launched just because a definition exists.
 
 ## Launching children
 
@@ -55,6 +102,7 @@ Each task supports:
 | --- | --- |
 | `name` | Required short, meaningful kebab-case name, e.g. `review-parser`. This is the agent identifier shown in the UI and used by every tool. 1–48 characters; lowercase ASCII letters/digits with single hyphens between segments, starting with a letter. Must be unique in the session, even after discard or history eviction. |
 | `prompt` | Required, nonblank, self-contained task. |
+| `agent` | Optional exact frontmatter name from `subagents_list`. Its body and canonical source directory are automatically inserted into the child system prompt. |
 | `model` | Parent model ID. Must resolve with the selected provider. |
 | `provider` | Parent provider. |
 | `thinkingLevel` | Parent context's thinking level, falling back to Pi's current setting. Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Provider/model support still applies. |
@@ -69,7 +117,7 @@ Names stay reserved until session cleanup so stale tool calls or queued notifica
 
 There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
 
-A child does **not** inherit the parent conversation. It always receives the parent session's effective system prompt. It inherits the parent model, thinking level, Pi settings, tools, extensions, and MCP servers unless the task overrides those. `appendSystemPrompt` adds text after that prompt; it cannot replace it. It is a separate in-memory Pi session in the same workspace. File ownership should be explicit when children can edit the same files.
+A child does **not** inherit the parent conversation. It always receives the parent session's effective system prompt. It inherits the parent model, thinking level, Pi settings, tools, extensions, and MCP servers unless the task overrides those. A selected `agent` adds its role instructions after the inherited prompt and child appendix. `appendSystemPrompt` follows the role; neither replaces the parent prompt. It is a separate in-memory Pi session in the same workspace. File ownership should be explicit when children can edit the same files.
 
 The default comes from `ctx.tools`, not the parent's active model declarations. Callable tools are declared directly to the child even when the parent accesses them through codemode. Hidden, model-only, and otherwise non-callable tools are not inherited.
 
@@ -266,7 +314,21 @@ From `home/.pi`:
 npm run test:subagents
 ```
 
-Tests use real in-process Agents and controlled provider streams, without paid API requests. Coverage includes:
+The default suite uses real in-process Agents and controlled provider streams, without paid API requests. `npm run test:subagents:live` runs the existing real-CLI/RPC test with a scripted local provider (also free).
+
+For an explicit paid test using your configured credentials:
+
+```sh
+SUBAGENTS_LIVE_TEST=1 npm run test:subagents:paid
+# Optional: SUBAGENTS_LIVE_PROVIDER=openai SUBAGENTS_LIVE_MODEL=gpt-6.1-sol
+```
+
+The paid test uses low effort, allows one tool-free child, caps parent turns, and aborts after two minutes. A real parent model must choose a newly discovered fixture agent by description and launch it with `agent`. A random token exists only in the definition body: the test asserts it was injected into the child's request, absent from the parent's launch prompt, returned by the child, and integrated by the parent. Temporary files and child sessions are cleaned up. It does not edit the working repository or mutate remote services. Provider billing is authoritative; a failed test can still incur charges.
+
+Coverage includes:
+
+- Named definition parsing, invalid settings, shadowing, deterministic precedence, trusted-project gating, nested directories, symlink aliases/cycles, bounded reads, and fresh discovery after edits/deletions.
+- Catalog advertisement without body leakage, automatic child prompt injection (including fallback prompt construction), source paths, named-job metadata, generic-task isolation, and atomic rejection of missing/invalid definitions.
 
 - Real Pi extension loading, absence of opening commands/shortcuts, conservative delegation descriptions/guidelines, required kebab-case names, atomic duplicate-name validation, name reservation/reset, inheritance, tool selection and permission-hook delegation.
 - Concurrent runs, queued guidance, failure/abort handling, stopping, and session cleanup.

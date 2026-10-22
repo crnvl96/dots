@@ -1,7 +1,7 @@
 // Run from home/.pi: npm run test:subagents
 // Uses the real in-process Agent with controlled provider streams; no network or pi subprocess.
 import assert from 'node:assert/strict';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, writeFileSync, unlinkSync } from 'node:fs';
 import fsPromises, { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -203,14 +203,14 @@ test('loads through Pi’s real extension loader', async (t) => {
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
+  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_list', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
   assert.equal(result.extensions[0].commands.size, 0);
   assert.equal(result.extensions[0].shortcuts.size, 0);
 });
 
 test('registers launch, steer, wait, discard and status tools with structured output contracts', (t) => {
   const h = harness(t);
-  assert.deepEqual([...h.tools.keys()], ['subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
+  assert.deepEqual([...h.tools.keys()], ['subagents_list', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
   for (const tool of h.tools.values()) assert.equal(tool.outputSchema.type, 'object');
 });
 
@@ -481,6 +481,102 @@ test('launch returns IDs without waiting; children run in parallel and notify ou
   assert.equal(late.structuredContent.agent.status, 'completed');
   assert.match(late.structuredContent.agent.result, /first answer/);
   assert.equal(h.notifications.length, 2);
+});
+
+function writeRole(h, body = 'ROLE_ONLY_TOKEN: zeta-seven', extra = '') {
+  const dir = join(h.ctx.cwd, '.agents', 'agents');
+  mkdirSync(dir, { recursive: true });
+  const path = join(dir, 'fixture-role.md');
+  writeFileSync(path, `---\nname: fixture-reviewer\ndescription: Review fixture logic independently.\n${extra}---\n${body}\n`);
+  return realpathSync(path);
+}
+
+test('named definitions are discoverable without launching jobs or exposing their bodies to the parent', async (t) => {
+  const h = harness(t);
+  const path = writeRole(h);
+  const result = await h.call('subagents_list', {});
+  assert.deepEqual(result.structuredContent.agents.find(a => a.name === 'fixture-reviewer'), {
+    name: 'fixture-reviewer', description: 'Review fixture logic independently.', filePath: path, source: 'project',
+  });
+  assert.doesNotMatch(JSON.stringify(result), /zeta-seven/);
+  assert.equal(h.requests.length, 0);
+  const event = { systemPromptOptions: { sections: { existing: 'preserved' } } };
+  h.events.get('before_agent_start')(event, h.ctx);
+  assert.match(event.systemPromptOptions.sections.subagent_definitions, /fixture-reviewer/);
+  assert.doesNotMatch(event.systemPromptOptions.sections.subagent_definitions, /zeta-seven/);
+  assert.equal(event.systemPromptOptions.sections.existing, 'preserved');
+  unlinkSync(path);
+  h.events.get('before_agent_start')(event, h.ctx);
+  assert.doesNotMatch(event.systemPromptOptions.sections.subagent_definitions, /fixture-reviewer/);
+});
+
+test('named launch injects its body and source path into the real child system prompt, separate from the task', async (t) => {
+  const h = harness(t);
+  const path = writeRole(h);
+  const result = await h.launch([{ name: 'role-job', agent: 'fixture-reviewer', prompt: 'Review my change.', tools: [], appendSystemPrompt: 'Task appendix' }]);
+  await until(() => h.requests.length === 1);
+  const prompt = system(h.requests[0]).content;
+  assert.match(prompt, /^Parent effective system prompt/);
+  assert.ok(prompt.includes(path));
+  assert.match(prompt, /ROLE_ONLY_TOKEN: zeta-seven/);
+  assert.ok(prompt.indexOf('child Pi session') < prompt.indexOf('ROLE_ONLY_TOKEN'));
+  assert.ok(prompt.indexOf('ROLE_ONLY_TOKEN') < prompt.indexOf('Task appendix'));
+  assert.deepEqual(userTexts(h.requests[0]), ['Review my change.']);
+  assert.deepEqual(system(h.requests[0]).toolsAdded ?? [], []);
+  assert.equal(result.structuredContent.agents[0].agentType, 'fixture-reviewer');
+  assert.equal(result.structuredContent.agents[0].agentFile, path);
+  h.requests[0].finish('role used');
+  await until(() => h.notifications.length === 1);
+  const status = await h.call('subagents_status', { id: 'role-job' });
+  assert.equal(status.structuredContent.agents[0].agentType, 'fixture-reviewer');
+});
+
+test('named instructions also load without a parent effective-prompt getter', async (t) => {
+  const h = harness(t);
+  writeRole(h);
+  delete h.ctx.getSystemPrompt;
+  await h.launch([{ agent: 'fixture-reviewer', prompt: 'Fallback parent prompt.', tools: [] }]);
+  await until(() => h.requests.length === 1);
+  assert.match(system(h.requests[0]).content, /ROLE_ONLY_TOKEN: zeta-seven/);
+  h.requests[0].finish();
+});
+
+test('unknown or invalid roles fail the entire batch without model calls or name reservations', async (t) => {
+  const h = harness(t);
+  writeRole(h);
+  const tasks = [{ name: 'valid-job', agent: 'fixture-reviewer', prompt: 'valid' }, { name: 'invalid-job', agent: 'missing-role', prompt: 'invalid' }];
+  await assert.rejects(h.launch(tasks), /Unknown or invalid agent definition.*missing-role/);
+  assert.equal(h.requests.length, 0);
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  writeRole(h, 'bad configuration', 'permissionMode: bypassPermissions\n');
+  await assert.rejects(h.launch([tasks[0]]), /Unknown or invalid agent definition/);
+  const invalid = await h.call('subagents_list', {});
+  assert.ok(invalid.structuredContent.diagnostics.some(d => d.includes('permissionMode')));
+  writeRole(h);
+  await h.launch([tasks[0]]); // The failed batch did not reserve valid-job.
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish();
+});
+
+test('trusted-project definitions refresh on launch and do not leak into generic children', async (t) => {
+  const h = harness(t);
+  const path = writeRole(h, 'FIRST_ROLE_BODY');
+  await h.launch([{ agent: 'fixture-reviewer', prompt: 'first', tools: [] }]);
+  await until(() => h.requests.length === 1);
+  writeRole(h, 'SECOND_ROLE_BODY');
+  await h.launch([{ agent: 'fixture-reviewer', prompt: 'second', tools: [] }, { prompt: 'generic', tools: [] }]);
+  await until(() => h.requests.length === 3);
+  assert.match(system(h.requests[0]).content, /FIRST_ROLE_BODY/);
+  assert.doesNotMatch(system(h.requests[0]).content, /SECOND_ROLE_BODY/);
+  assert.match(system(h.requests[1]).content, /SECOND_ROLE_BODY/);
+  assert.doesNotMatch(system(h.requests[2]).content, /FIRST_ROLE_BODY|SECOND_ROLE_BODY/);
+  h.ctx.isProjectTrusted = () => false;
+  assert.ok(!(await h.call('subagents_list', {})).structuredContent.agents.some(a => a.name === 'fixture-reviewer'));
+  await assert.rejects(h.launch([{ agent: 'fixture-reviewer', prompt: 'untrusted' }]), /Unknown or invalid agent definition/);
+  h.ctx.isProjectTrusted = () => true;
+  unlinkSync(path);
+  await assert.rejects(h.launch([{ agent: 'fixture-reviewer', prompt: 'deleted' }]), /Unknown or invalid agent definition/);
+  h.requests.forEach(r => r.finish());
 });
 
 test('passes model, provider, thinking, exact tools, system prompt and prompt to the real Agent', async (t) => {

@@ -7,11 +7,13 @@ import {
 } from '@earendil-works/pi-coding-agent';
 import { config } from './config.ts';
 import type { TaskInput } from './contracts.ts';
+import { definitionPrompt, type AgentDefinition } from './definitions.ts';
 import { askTool } from './feedback.ts';
 import { childPromptAppendix } from './prompts.ts';
 
 export interface OpenChildInput {
   task: TaskInput;
+  definition?: AgentDefinition;
   ctx: ExtensionToolContext;
   pi: ExtensionAPI;
   thinkingLevel: ThinkingLevel;
@@ -62,11 +64,16 @@ function hardExitExtension(clear: { run: () => void }, hardExit: { hit: boolean 
   };
 }
 
-/** Parent effective prompt, then the child appendix, then an optional task append. Never a replacement. */
-export function resolveChildSystemPrompt(task: TaskInput, ctx: ExtensionToolContext): string | undefined {
+/** Preserve the parent prompt; the selected role is inserted by the runtime, not read on request by the model. */
+export function resolveChildSystemPrompt(task: TaskInput, ctx: ExtensionToolContext, definition?: AgentDefinition): string | undefined {
   const parent = ctx.getSystemPrompt?.();
   if (parent === undefined) return undefined;
-  return [parent, childPromptAppendix, task.appendSystemPrompt?.trim()].filter(Boolean).join('\n\n');
+  return [parent, ...childPromptParts(task, definition)].filter(Boolean).join('\n\n');
+}
+
+function childPromptParts(task: TaskInput, definition?: AgentDefinition) {
+  return [childPromptAppendix, definition && definitionPrompt(definition), task.appendSystemPrompt?.trim()]
+    .filter((part): part is string => Boolean(part));
 }
 
 export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
@@ -81,6 +88,7 @@ export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
 export async function openChildSession(input: OpenChildInput): Promise<OpenedChild> {
   const host = input.ctx as HostContext;
   const task = input.task;
+  if (task.agent && input.definition?.name !== task.agent) throw new Error(`Agent definition was not resolved: ${task.agent}`);
   if (!task.prompt.trim()) throw new Error('Subagent prompt must not be blank.');
   const model = resolveModel(task, input.ctx);
   const agentDir = host.agentDir || getAgentDir();
@@ -96,7 +104,7 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     : task.tools.length === 0 ? []
       : [...new Set([...task.tools, config.askTool])];
   const isolated = Boolean(host.agentDir);
-  const forcedPrompt = resolveChildSystemPrompt(task, input.ctx);
+  const forcedPrompt = resolveChildSystemPrompt(task, input.ctx, input.definition);
   const resourceLoader = new DefaultResourceLoader({
     cwd: input.ctx.cwd,
     agentDir,
@@ -120,7 +128,7 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     ],
     ...(forcedPrompt !== undefined
       ? { systemPromptOverride: () => forcedPrompt }
-      : { appendSystemPrompt: [childPromptAppendix, task.appendSystemPrompt?.trim()].filter((part): part is string => Boolean(part)) }),
+      : { appendSystemPrompt: childPromptParts(task, input.definition) }),
   });
   await resourceLoader.reload();
   const { session } = await createAgentSession({

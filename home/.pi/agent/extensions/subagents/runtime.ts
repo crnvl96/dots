@@ -2,6 +2,7 @@ import type { AgentEvent, ThinkingLevel } from '@earendil-works/pi-agent-core';
 import { truncateHead, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth } from '@earendil-works/pi-tui';
 import { config } from './config.ts';
+import { catalogForContext } from './catalog.ts';
 import { active, lastAssistantText, type FeedbackKind, type Job } from './contracts.ts';
 import { deliverFeedback } from './feedback.ts';
 import { boundedReport, jobStats, oneLine, snapshot } from './formatting.ts';
@@ -229,6 +230,15 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   async function launch(tasks: TaskInput[], signal: AbortSignal | undefined, ctx: ExtensionToolContext) {
     signal?.throwIfAborted();
     if (!tasks.length) throw new Error('At least one subagent task is required.');
+    // Resolve all requested roles from one fresh scan before reserving names or opening sessions.
+    // The body is snapshotted for this launch; later filesystem edits affect only later launches.
+    const catalog = tasks.some((task) => task.agent !== undefined) ? catalogForContext(ctx) : undefined;
+    const definitions = tasks.map((task) => {
+      if (task.agent === undefined) return undefined;
+      const definition = catalog?.agents.find((item) => item.name === task.agent);
+      if (!definition) throw new Error(`Unknown or invalid agent definition: ${task.agent}. Use subagents_list for available names and discovery diagnostics.`);
+      return definition;
+    });
     const batchNames = new Set<string>();
     const reserved: string[] = [];
     const opened: Job[] = [];
@@ -245,10 +255,11 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
         usedNames.add(task.name);
         reserved.push(task.name);
       }
-      for (const task of tasks) {
+      for (const [index, task] of tasks.entries()) {
         signal?.throwIfAborted();
+        const definition = definitions[index];
         const child = await openChildSession({
-          task, ctx, pi, thinkingLevel,
+          task, definition, ctx, pi, thinkingLevel,
           onAsk: (message, kind) => {
             const job = jobs.get(task.name);
             if (job) ask(job, message, kind);
@@ -257,6 +268,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
         const job: Job = {
           id: task.name, session: child.session, agent: child.agent,
           model: child.modelId, provider: child.provider, prompt: task.prompt, cwd: ctx.cwd,
+          ...(definition ? { agentType: definition.name, agentFile: definition.filePath } : {}),
           cancelled: false, status: 'running', startedAt: Date.now(), activity: 'Starting',
           revision: 0, pendingSteers: 0, asks: 0, tools: new Map(), notification: 'pending',
         };

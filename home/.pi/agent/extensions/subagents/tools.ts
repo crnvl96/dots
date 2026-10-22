@@ -1,12 +1,29 @@
 import { Type, type Static } from 'typebox';
 import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import { snapshot } from './formatting.ts';
+import { catalogForContext } from './catalog.ts';
 import { launchDescription, launchGuidelines } from './prompts.ts';
 import type { Runtime } from './runtime.ts';
 import { statusText, waitText } from './runtime.ts';
 import { DiscardSchema, InspectSchema, LaunchSchema, SnapshotSchema, SteerSchema, WaitSchema } from './schemas.ts';
 
 export function registerTools(pi: ExtensionAPI, runtime: Runtime) {
+  pi.registerTool({
+    name: 'subagents_list', label: 'List agent definitions',
+    description: 'Discover named agent definitions (not running jobs) from user and trusted-project .agents/agents and .claude/agents directories. Returns names, descriptions, source paths and validation diagnostics. Pass a name as tasks[].agent in subagents_launch to automatically apply its instructions. Rescans files on every call.',
+    parameters: Type.Object({}),
+    outputSchema: Type.Object({
+      agents: Type.Array(Type.Object({ name: Type.String(), description: Type.String(), filePath: Type.String(), source: Type.Union([Type.Literal('user'), Type.Literal('project')]) })),
+      diagnostics: Type.Array(Type.String()),
+    }),
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
+    async execute(_callId, _params, signal, _onUpdate, ctx) {
+      signal?.throwIfAborted();
+      const catalog = catalogForContext(ctx);
+      const result = { agents: catalog.agents.map(({ body: _body, ...metadata }) => metadata), diagnostics: catalog.diagnostics };
+      return { content: [{ type: 'text', text: JSON.stringify(result, null, 2) }], details: result, structuredContent: result };
+    },
+  });
   pi.registerTool({
     name: 'subagents_launch', label: 'Launch subagents',
     description: launchDescription,

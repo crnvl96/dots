@@ -1,14 +1,14 @@
 ---
-name: code-review-quality
-description: Run a strict maintainability review focused on abstraction quality, oversized files, structural simplicity, and branching complexity.
+name: thermo-nuclear-code-quality-review
+description: Run an extremely strict maintainability review for abstraction quality, giant files, and spaghetti-condition growth. Use for a thermo-nuclear code quality review, thermonuclear review, deep code quality audit, or especially harsh maintainability review.
 disable-model-invocation: true
 ---
 
-# Code Review Quality
-
-Adapted from Cursor's Thermos code-quality review skill: https://github.com/cursor/plugins/blob/main/thermos/skills/thermo-nuclear-code-quality-review/SKILL.md
+# Thermo-Nuclear Code Quality Review
 
 Use this skill for an unusually strict review focused on implementation quality, maintainability, abstraction quality, and codebase health.
+
+First read [review scope and reporting](../thermos/references/review-workflow.md). Those shared conventions establish the target, read-only boundaries, repository guidance, snapshot exception to diff-only scope, and findings format. Then apply the upstream rubric below. Propose structural remedies; do not implement them without explicit user authorization.
 
 Above all, this skill should push the reviewer to be **ambitious** about code structure. Do not merely identify local cleanup opportunities. Actively search for "code judo" moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant.
 

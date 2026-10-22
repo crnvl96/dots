@@ -28,6 +28,8 @@ export interface Job {
   agent?: Agent;
   model: string;
   provider: string;
+  agentType?: string;
+  agentFile?: string;
   stats?: string;
   discarded?: boolean;
   prompt: string;

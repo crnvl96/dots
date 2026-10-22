@@ -8,7 +8,8 @@
     "test:web-tools": "node --test agent/extensions/web-tools/tests/*.test.ts",
     "test:web-tools:live": "node agent/extensions/web-tools/tests/web-tools.live.ts",
     "test:subagents": "node --test agent/extensions/subagents/tests/*.test.ts",
-    "test:subagents:live": "node --test agent/extensions/subagents/tests/process.test.ts"
+    "test:subagents:live": "node --test agent/extensions/subagents/tests/process.test.ts",
+    "test:subagents:paid": "node agent/extensions/subagents/tests/named-agents.live.ts"
   },
   "dependencies": {
     "glimpseui": "0.8.1"

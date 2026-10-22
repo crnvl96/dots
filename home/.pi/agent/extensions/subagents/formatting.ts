@@ -11,6 +11,7 @@ const TOKEN_FORMAT = new Intl.NumberFormat('en-US', { notation: 'compact', maxim
 export function snapshot(job: Job, includeResult = false): Snapshot {
   return {
     id: job.id, prompt: job.prompt, model: job.model, provider: job.provider,
+    ...(job.agentType ? { agentType: job.agentType, agentFile: job.agentFile } : {}),
     status: job.status, activity: job.activity, pendingSteers: job.pendingSteers,
     elapsedMs: Math.max(0, (job.finishedAt ?? Date.now()) - job.startedAt),
     notification: job.notification, error: job.error ?? null, notificationError: job.notificationError ?? null,

@@ -10,6 +10,7 @@ export const TaskSchema = Type.Object({
     description: 'Meaningful short kebab-case name, e.g. review-parser. This is the agent ID for all tools and UI. Must be unique for this session, including discarded agents.',
   }),
   prompt: Type.String({ minLength: 1 }),
+  agent: Type.Optional(Type.String({ minLength: 1, description: 'Named agent definition from subagents_list (frontmatter name, not the unique job name). Its Markdown instructions are loaded automatically into the child system prompt.' })),
   model: Type.Optional(Type.String({ minLength: 1, description: 'Model ID; defaults to the parent model ID.' })),
   provider: Type.Optional(Type.String({ minLength: 1, description: 'Defaults to the parent provider.' })),
   thinkingLevel: Type.Optional(StringEnum(['off', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const)),
@@ -41,6 +42,7 @@ export const DiscardSchema = Type.Object({
 const NullableString = Type.Union([Type.String(), Type.Null()]);
 export const SnapshotSchema = Type.Object({
   id: Type.String(), prompt: Type.String(), model: Type.String(), provider: Type.String(),
+  agentType: Type.Optional(Type.String()), agentFile: Type.Optional(Type.String()),
   status: StringEnum(['running', 'stopping', 'completed', 'failed', 'stopped'] as const),
   activity: Type.String(), pendingSteers: Type.Integer(), elapsedMs: Type.Number(),
   notification: StringEnum(['pending', 'queued', 'failed'] as const),
