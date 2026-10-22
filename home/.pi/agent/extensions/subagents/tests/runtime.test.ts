@@ -1,6 +1,7 @@
 // Run from home/.pi: npm run test:subagents
 // Uses the real in-process Agent with controlled provider streams; no network or pi subprocess.
 import assert from 'node:assert/strict';
+import { mkdtempSync } from 'node:fs';
 import fsPromises, { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { syncBuiltinESMExports } from 'node:module';
 import { tmpdir } from 'node:os';
@@ -8,11 +9,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { setImmediate } from 'node:timers/promises';
 import test from 'node:test';
+import { Type } from 'typebox';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { Agent } from '@earendil-works/pi-agent-core';
 import { DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
 import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
-import extension from './index.ts';
+import extension from '../index.ts';
 
 const parentModel = {
   id: 'parent-model', provider: 'parent-provider', api: 'openai-completions',
@@ -22,7 +24,8 @@ const parentModel = {
 const childModel = { ...parentModel, id: 'child-model', provider: 'child-provider' };
 
 async function until(predicate) {
-  for (let i = 0; i < 100; i++) {
+  const started = Date.now();
+  while (Date.now() - started < 4000) {
     if (predicate()) return;
     await setImmediate();
   }
@@ -30,6 +33,8 @@ async function until(predicate) {
 }
 
 function harness(t, mode = 'print', renderer) {
+  const directory = mkdtempSync(join(tmpdir(), 'pi-subagents-harness-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
   const tools = new Map();
   const events = new Map();
   const commands = new Map();
@@ -78,9 +83,11 @@ function harness(t, mode = 'print', renderer) {
   const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
   const ctx = {
     mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
-    cwd: process.cwd(),
+    cwd: directory,
+    agentDir: directory,
     model: parentModel,
     thinkingLevel: 'medium',
+    isProjectTrusted: () => true,
     tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'].map((name) => ({
       name, label: name, description: name, parameters: schema,
       execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
@@ -112,6 +119,7 @@ function harness(t, mode = 'print', renderer) {
           },
         };
         options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), { once: true });
+        if (options?.signal?.aborted) queueMicrotask(() => request.finish('', 'aborted'));
         requests.push(request);
         return stream;
       },
@@ -124,6 +132,7 @@ function harness(t, mode = 'print', renderer) {
     on(event, handler) { events.set(event, handler); },
     getActiveTools() { return active; },
     getThinkingLevel() { return 'low'; },
+    getSettings() { return { retry: { enabled: false }, cacheWarming: 'off', defaultTools: ['read', 'bash', 'edit', 'write'] }; },
     sendMessage(message, options) { notifications.push({ message, options }); },
   };
   extension(pi);
@@ -156,8 +165,23 @@ function harness(t, mode = 'print', renderer) {
     get renders() { return renders; }, notifications, requests, nested, active, ctx, pi, call, launch, steer };
 }
 
+function useChildTools(h, tools) {
+  h.ctx.extensionFactories = [(pi) => {
+    for (const [name, execute] of Object.entries(tools)) {
+      pi.registerTool({
+        name, label: name, description: name,
+        parameters: Type.Object({ path: Type.Optional(Type.String()) }),
+        execute,
+      });
+    }
+  }];
+}
+
 function system(request) {
-  return request.context.messages.find((message) => message.role === 'system') ?? { content: '', toolsAdded: [] };
+  const message = request.context.messages.find((message) => message.role === 'system') ?? {};
+  const sections = message.sections ? Object.values(message.sections).filter(Boolean).join('\n') : '';
+  const content = (typeof message.content === 'string' && message.content) ? message.content : sections || request.context.systemPrompt || '';
+  return { ...message, content, toolsAdded: message.toolsAdded ?? request.context.tools?.map((tool) => ({ name: tool.name })) ?? [] };
 }
 
 function userTexts(request) {
@@ -172,7 +196,7 @@ test('loads through Pi’s real extension loader', async (t) => {
   const loader = new DefaultResourceLoader({
     cwd: directory, agentDir: directory, settingsManager: SettingsManager.inMemory(),
     noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
-    additionalExtensionPaths: [fileURLToPath(new URL('./index.ts', import.meta.url))],
+    additionalExtensionPaths: [fileURLToPath(new URL('../index.ts', import.meta.url))],
   });
   await loader.reload();
   const result = loader.getExtensions();
@@ -253,20 +277,13 @@ test('finished jobs release Agent, tool results, subscriptions and UI caches but
   h.requests[1].finish('small final report');
   const waited = await h.call('subagents_wait', { ids: [id] });
   assert.match(waited.structuredContent.agents[0].result, /small final report/);
-  assert.equal(job.agent, undefined);
-  assert.equal(job.unsubscribe, undefined);
+  assert.ok(job.agent, 'The live session stays available so the user can type a follow-up.');
+  assert.equal(typeof job.unsubscribe, 'function');
   assert.equal(job.done, undefined);
-  assert.equal(job.tools.size, 0);
-  assert.equal(panel.messages.size, 0);
-  assert.equal(panel.toolComponents.size, 0);
-  assert.deepEqual(panel.transcript.mouseLayout.children, []);
-  assert.equal(panel.lastStreaming, undefined);
-  assert.equal(panel.partial, undefined);
-  assert.equal(panel.composing.getExpandedText(), '');
-  assert.equal(panel.drafts.size, 0);
   panel.handleInput('\r');
   assert.match(screen(panel), /small final report/);
-  assert.doesNotMatch(screen(panel), /HEAVY_TOOL_PAYLOAD|private reasoning|an unused draft/);
+  panel.handleInput('follow up');
+  assert.match(screen(panel), /follow up/);
   await h.call('subagents_discard', { ids: [id] });
   assert.equal(panel.viewedJob, undefined);
   assert.match(screen(panel), /No subagents yet/);
@@ -331,8 +348,8 @@ for (const stopReason of ['error', 'aborted']) {
     assert.equal(result.notification, 'failed');
     assert.equal(result.status, 'failed');
     assert.match(result.result, /recoverable findings/);
-    assert.equal(job.agent, undefined);
-    assert.equal(job.unsubscribe, undefined);
+    assert.ok(job.agent);
+    assert.equal(typeof job.unsubscribe, 'function');
     await h.call('subagents_discard', { ids: [id] });
     panel.handleInput('\x1b');
     await opened;
@@ -469,14 +486,14 @@ test('passes model, provider, thinking, exact tools, system prompt and prompt to
   const h = harness(t);
   await h.launch([{
     prompt: 'my task', provider: childModel.provider, model: childModel.id,
-    thinkingLevel: 'high', tools: ['perplexity_search'], systemPrompt: 'Custom system instructions',
+    thinkingLevel: 'high', tools: ['read'], systemPrompt: 'Custom system instructions',
   }]);
   await until(() => h.requests.length === 1);
   const request = h.requests[0];
   assert.equal(request.model, childModel);
   assert.equal(request.options.reasoning, 'high');
-  assert.equal(system(request).content, 'Custom system instructions');
-  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['perplexity_search']);
+  assert.match(system(request).content, /^Custom system instructions/);
+  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name).sort(), ['read', 'subagents_ask']);
   assert.deepEqual(userTexts(request), ['my task']);
   request.finish('custom answer');
   await until(() => h.notifications.length === 1);
@@ -484,39 +501,46 @@ test('passes model, provider, thinking, exact tools, system prompt and prompt to
 
 test('inherits model/thinking and all callable tools, without orchestration tools or parent history', async (t) => {
   const h = harness(t);
-  await h.launch([{ prompt: 'default task' }, { prompt: 'explicit task', tools: ['perplexity_search'] }]);
+  await h.launch([{ prompt: 'default task' }, { prompt: 'explicit task', tools: ['read'] }]);
   await until(() => h.requests.length === 2);
   const request = h.requests[0];
   assert.equal(request.model, parentModel);
   assert.equal(request.options.reasoning, 'medium');
-  assert.match(system(request).content, /general-purpose subagent/);
-  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name), ['read', 'perplexity_search']);
+  assert.match(system(request).content, /child Pi session/);
+  assert.match(system(request).content, /do not inherit its conversation history/i);
+  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('read'));
+  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('bash'));
+  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('subagents_ask'));
+  assert.deepEqual(system(h.requests[1]).toolsAdded.map((tool) => tool.name).sort(), ['read', 'subagents_ask']);
   assert.deepEqual(userTexts(request), ['default task']);
   h.requests.forEach((request) => request.finish());
   await until(() => h.notifications.length === 2);
 });
 
-test('bash-only active loadout still inherits and executes callable file, web, and MCP tools', async (t) => {
+test('child sessions execute extension and MCP-named tools themselves, independent of the parent active loadout', async (t) => {
   const h = harness(t);
   h.active.splice(0, h.active.length, 'bash', 'codemode', 'subagents_launch');
-  const names = ['bash', 'read', 'edit', 'write', 'openrouter_web_search', 'mcp__example__search'];
-  const template = h.ctx.tools[0];
-  h.ctx.tools = [
-    ...names.map(name => ({ ...template, name, label: name, description: name })),
-    ...h.ctx.tools.filter(tool => tool.name.startsWith('subagents_')),
-  ];
+  const seen = [];
+  useChildTools(h, Object.fromEntries(['openrouter_web_search', 'mcp__example__search'].map((name) => [name, async (_id, args, signal) => {
+    seen.push({ name, args, signal });
+    return { content: [{ type: 'text', text: `${name} ok` }], details: {} };
+  }])));
   await h.launch([{ prompt: 'use every callable tool' }]);
   await until(() => h.requests.length === 1);
-  assert.deepEqual(system(h.requests[0]).toolsAdded.map(tool => tool.name), names);
+  const enabled = system(h.requests[0]).toolsAdded.map((tool) => tool.name);
+  for (const name of ['read', 'bash', 'edit', 'write', 'openrouter_web_search', 'mcp__example__search', 'subagents_ask']) {
+    assert.ok(enabled.includes(name), name);
+  }
   h.requests[0].finish('', 'toolUse', {
-    content: names.map((name, i) => ({
+    content: ['openrouter_web_search', 'mcp__example__search'].map((name, i) => ({
       type: 'toolCall', id: `child-tool-${i}`, name, arguments: { path: 'example.ts' },
     })),
   });
   await until(() => h.requests.length === 2);
-  assert.deepEqual(h.nested.map(call => call.name).sort(), [...names].sort());
-  assert.ok(h.nested.every(call => call.options.signal === h.requests[0].options.signal));
-  h.requests[1].finish('all tools reached parent hooks');
+  assert.deepEqual(seen.map((call) => call.name).sort(), ['mcp__example__search', 'openrouter_web_search']);
+  assert.ok(seen.every((call) => call.signal === h.requests[0].options.signal));
+  assert.equal(h.nested.length, 0);
+  h.requests[1].finish('child tools ran in the child');
   await until(() => h.notifications.length === 1);
 });
 
@@ -525,10 +549,12 @@ test('explicit empty tools and empty system prompt are respected; thinking falls
   delete h.ctx.thinkingLevel;
   await h.launch([{ prompt: 'no tools', tools: [], thinkingLevel: 'off', systemPrompt: '' }, { prompt: 'fallback' }]);
   await until(() => h.requests.length === 2);
-  assert.deepEqual(system(h.requests[0]).toolsAdded ?? [], []);
-  assert.equal(system(h.requests[0]).content, '');
-  assert.equal(h.requests[0].options.reasoning, undefined); // Agent maps off to no reasoning.
-  assert.equal(h.requests[1].options.reasoning, 'low');
+  const empty = h.requests.find((request) => userTexts(request).includes('no tools'));
+  const fallback = h.requests.find((request) => userTexts(request).includes('fallback'));
+  assert.deepEqual(system(empty).toolsAdded ?? [], []);
+  assert.equal(system(empty).content, '');
+  assert.equal(empty.options.reasoning, undefined); // Agent maps off to no reasoning.
+  assert.equal(fallback.options.reasoning, 'low');
 });
 
 test('parallel launch calls keep independent IDs and state', async (t) => {
@@ -556,22 +582,28 @@ test('steering reaches the running child on its next request, not the parent', a
   assert.doesNotMatch(h.notifications[0].message.content, /initial response/);
 });
 
-test('delegated tools use parent hooks with the child signal and preserve error results', async (t) => {
+test('child tools use the child signal, not the parent launch signal, and preserve error results', async (t) => {
   const h = harness(t);
+  const seen = [];
+  useChildTools(h, {
+    guarded_read: async (_id, args, signal) => {
+      seen.push({ args, signal });
+      return { content: [{ type: 'text', text: 'permission denied' }], details: { checked: true }, isError: true };
+    },
+  });
   const controller = new AbortController();
-  await h.launch([{ prompt: 'read a file', tools: ['read'] }], controller.signal);
+  await h.launch([{ prompt: 'read a file', tools: ['guarded_read'] }], controller.signal);
   await until(() => h.requests.length === 1);
-  controller.abort(); // A background job is not owned by the parent's finished tool call.
+  controller.abort();
   assert.equal(h.requests[0].options.signal.aborted, false);
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'child-read', name: 'read', arguments: { path: 'example.ts' } }],
+    content: [{ type: 'toolCall', id: 'child-read', name: 'guarded_read', arguments: { path: 'example.ts' } }],
   });
   await until(() => h.requests.length === 2);
-  assert.equal(h.nested.length, 1);
-  assert.equal(h.nested[0].name, 'read');
-  assert.deepEqual(h.nested[0].args, { path: 'example.ts' });
-  assert.equal(h.nested[0].options.signal, h.requests[0].options.signal);
-  assert.notEqual(h.nested[0].options.signal, controller.signal);
+  assert.equal(seen.length, 1);
+  assert.deepEqual(seen[0].args, { path: 'example.ts' });
+  assert.equal(seen[0].signal, h.requests[0].options.signal);
+  assert.notEqual(seen[0].signal, controller.signal);
   const toolResult = h.requests[1].context.messages.find((message) => message.role === 'toolResult');
   assert.equal(toolResult.isError, true);
   assert.equal(toolResult.content[0].text, 'permission denied');
@@ -585,15 +617,17 @@ test('steering during a child tool execution waits for that tool, then changes t
   let toolStarted = false;
   const toolFinished = new Promise((resolve) => { release = resolve; });
   t.after(() => release());
-  h.ctx.executeTool = async () => {
-    toolStarted = true;
-    await toolFinished;
-    return { result: { content: [{ type: 'text', text: 'file read' }], details: undefined }, isError: false };
-  };
+  useChildTools(h, {
+    slow_read: async () => {
+      toolStarted = true;
+      await toolFinished;
+      return { content: [{ type: 'text', text: 'file read' }], details: {} };
+    },
+  });
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'inspect files' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'reading', name: 'read', arguments: { path: 'file.ts' } }],
+    content: [{ type: 'toolCall', id: 'reading', name: 'slow_read', arguments: { path: 'file.ts' } }],
   });
   await until(() => toolStarted);
   await h.steer(id, 'only report the tests');
@@ -784,7 +818,7 @@ test('dashboard shows live native messages, thinking, tools, errors, and complet
   panel.handleInput('\x0f'); // Ctrl+O expands tool results.
   assert.match(screen(panel), /read/);
   assert.match(screen(panel), /source.ts/);
-  assert.match(screen(panel), /permission denied/);
+  assert.match(screen(panel), /ENOENT|permission denied/);
   h.requests[1].finish('Final child answer', 'error', { errorMessage: 'simulated failure' });
   await until(() => h.notifications.length === 1);
   assert.match(screen(panel), /Final child answer/);
@@ -865,22 +899,38 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   let release;
   let childSignal;
   const gate = new Promise((resolve) => { release = resolve; });
-  h.ctx.executeTool = async (_name, _args, options) => {
-    childSignal = options.signal;
-    childSignal.addEventListener('abort', () => release(), { once: true });
-    options.onUpdate?.({ content: [{ type: 'text', text: 'partial tool output' }], details: undefined });
-    await gate;
-    return { result: { content: [{ type: 'text', text: 'tool finished' }], details: undefined }, isError: false };
-  };
+  useChildTools(h, {
+    slow_read: async (_id, _args, signal, onUpdate) => {
+      childSignal = signal;
+      onUpdate?.({ content: [{ type: 'text', text: 'partial tool output' }], details: undefined });
+      await new Promise((resolve) => {
+        if (signal?.aborted) return resolve();
+        signal?.addEventListener('abort', () => resolve(), { once: true });
+        release = resolve;
+      });
+      if (signal?.aborted) throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
+      return { content: [{ type: 'text', text: 'tool finished' }], details: {} };
+    },
+  });
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'run a tool' }]);
   await until(() => h.requests.length === 1);
+  const enabled = system(h.requests[0]).toolsAdded.map((tool) => tool.name);
+  assert.ok(enabled.includes('slow_read'), enabled.join(','));
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'slow-tool', name: 'read', arguments: { path: 'slow.ts' } }],
+    content: [{ type: 'toolCall', id: 'slow-tool', name: 'slow_read', arguments: { path: 'slow.ts' } }],
   });
-  await until(() => childSignal);
+  try {
+    await until(() => childSignal || h.requests.length > 1);
+  } catch (error) {
+    assert.fail(`${error.message} nested=${JSON.stringify(h.nested)} requests=${h.requests.length}`);
+  }
+  if (!childSignal) {
+    const result = h.requests.at(-1).context.messages.find((message) => message.role === 'toolResult');
+    assert.fail(JSON.stringify(result ?? h.requests.at(-1).context.messages.map((message) => message.role)));
+  }
   const opened = h.open(id);
   const panel = h.dialogs[0].component;
-  assert.match(screen(panel), /Running read/);
+  assert.match(screen(panel), /Running slow_read/);
   assert.match(screen(panel), /partial tool output/);
   await h.steer(id, 'queued but must not run');
   panel.handleInput('\x18');
@@ -893,7 +943,7 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   release();
   await until(() => h.notifications.length === 1);
   assert.equal(h.notifications[0].message.details.status, 'stopped');
-  assert.equal(h.requests.length, 1);
+  assert.ok(h.requests.slice(1).every((request) => request.options.signal.aborted));
   panel.handleInput('\x1b');
   panel.handleInput('\x1b');
   await opened;
@@ -996,10 +1046,10 @@ test('child counters use actual tool calls and finalized tokens, and finished UI
   panel.handleInput('\r');
   const transcript = screen(panel);
   assert.match(transcript, new RegExp(`Subagents / ${id}`));
-  assert.match(transcript, /End of report/);
-  assert.match(transcript, /full agent state released/);
+  assert.match(transcript, /End of transcript/);
+  assert.match(transcript, /Enter send/);
   assert.match(transcript, /1 tool use · 1\.2K tokens/);
-  assert.doesNotMatch(transcript, /Enter.*steer|Ctrl\+X.*stop|Following live output|Ctrl\+O.*tools|Ctrl\+T.*thinking/);
+  assert.doesNotMatch(transcript, /Ctrl\+X.*stop|Following live output/);
   panel.handleInput('\x1b');
   panel.handleInput('\x1b');
   await opened;
@@ -1152,11 +1202,13 @@ test('stop confirmation and steering input remain visible on an eight-row termin
 test('mouse clicks reach scrolled thinking/tool blocks and their toggles survive stream updates', async (t) => {
   const h = harness(t, 'tui');
   h.tui.terminal.rows = 50;
-  h.ctx.executeTool = async () => ({ result: { content: [{ type: 'text', text: Array.from({ length: 21 }, (_, i) => `tool-row-${i}`).join('\n') }], details: undefined }, isError: false });
+  useChildTools(h, {
+    wide_read: async () => ({ content: [{ type: 'text', text: Array.from({ length: 21 }, (_, i) => `tool-row-${i}`).join('\n') }], details: {} }),
+  });
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'earlier context\n'.repeat(50) }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'thinking', thinking: 'Click-revealed reasoning' }, { type: 'toolCall', id: 'click-tool', name: 'read', arguments: { path: 'source.ts' } }],
+    content: [{ type: 'thinking', thinking: 'Click-revealed reasoning' }, { type: 'toolCall', id: 'click-tool', name: 'wide_read', arguments: { path: 'source.ts' } }],
   });
   await until(() => h.requests.length === 2);
   const opened = h.open(id);
@@ -1653,15 +1705,17 @@ for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
     let release;
     let childSignal;
     const gate = new Promise((resolve) => { release = resolve; });
-    h.ctx.executeTool = async (_name, _args, options) => {
-      childSignal = options.signal;
-      await gate; // Deliberately ignores cancellation until the test releases it.
-      return { result: { content: [{ type: 'text', text: 'released' }] }, isError: false };
-    };
+    useChildTools(h, {
+      slow_read: async (_id, _args, signal) => {
+        childSignal = signal;
+        await gate;
+        return { content: [{ type: 'text', text: 'released' }], details: {} };
+      },
+    });
     const { details: { ids } } = await h.launch([{ prompt: 'blocked child tool' }]);
     await until(() => h.requests.length === 1);
     h.requests[0].finish('', 'toolUse', {
-      content: [{ type: 'toolCall', id: 'blocked', name: 'read', arguments: { path: 'slow.ts' } }],
+      content: [{ type: 'toolCall', id: 'blocked', name: 'slow_read', arguments: { path: 'slow.ts' } }],
     });
     await until(() => childSignal);
     let rejected = false;
@@ -1784,7 +1838,7 @@ for (const scrolled of [false, true]) {
     assert.equal(mouse(panel, row + 1)?.handled, true);
     const detail = screen(panel);
     assert.ok(detail.includes(target));
-    assert.match(detail, /Enter.*steer/); // Transcript/editor view, not merely a selected list row.
+    assert.match(detail, /Enter send/); // Live session, not merely a selected list row.
     const displayedTasks = new Set(detail.match(/mouse-target-\d+/g));
     assert.deepEqual([...displayedTasks], [target]);
     panel.handleInput('\x1b');

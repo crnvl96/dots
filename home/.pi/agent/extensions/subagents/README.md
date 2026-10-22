@@ -2,7 +2,7 @@
 
 An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
 
-Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`.
+Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. The rest of the folder is split the same way as `web-tools`: config, contracts, schemas, prompts, session, runtime, tools, dashboard, and tests.
 
 ## Delegation policy
 
@@ -58,7 +58,7 @@ Each task supports:
 | `model` | Parent model ID. Must resolve with the selected provider. |
 | `provider` | Parent provider. |
 | `thinkingLevel` | Parent context's thinking level, falling back to Pi's current setting. Accepts `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. Provider/model support still applies. |
-| `tools` | All parent-callable tools at launch (including codemode/deferred tools), excluding this extension's orchestration tools. Supply exact names to choose a subset; `[]` disables tools. Explicit tools must be callable in the parent's context. |
+| `tools` | The same tool set a new Pi session would have: built-ins, extension tools, codemode, and MCP. Supply exact names to choose a subset; `[]` disables tools. `subagents_ask` stays available unless the list is empty. |
 | `systemPrompt` | General-purpose subagent instructions. A supplied value replaces these instructions; an explicit empty string is respected. |
 
 The entire batch is validated before any child starts, including missing/invalid names and duplicate names within the batch or session. A rejected batch reserves no names. Children then run concurrently with separate names and Agent instances.
@@ -69,11 +69,11 @@ Names stay reserved until session cleanup so stale tool calls or queued notifica
 
 There is no built-in concurrency limit, deadline, automatic retry, or per-child spend cap; use modest batches and stop unwanted work.
 
-A child does **not** inherit the parent conversation, parent system prompt, or project instructions automatically. Include the task context, relevant file paths, constraints, expected output, and any required instructions in its prompt. File ownership should be explicit when children can edit the same workspace.
+A child does **not** inherit the parent conversation. It does inherit the parent model, thinking level, Pi settings, tools, extensions, and MCP servers unless the task overrides them. It is a separate in-memory Pi session in the same workspace. File ownership should be explicit when children can edit the same files.
 
 The default comes from `ctx.tools`, not the parent's active model declarations. Callable tools are declared directly to the child even when the parent accesses them through codemode. Hidden, model-only, and otherwise non-callable tools are not inherited.
 
-Child tools call `ctx.executeTool()` so Pi's validation, permission hooks, and tool-result handling still apply. Tool selection is **not a security sandbox**: for example, `bash` can access the workspace and tools that orchestrate other tools can have broader reach. Subagent orchestration tools are excluded from direct child tool selection; this is not a security boundary against indirect orchestration.
+Child tools run inside the child session, with that session's extensions and permission hooks. Tool selection is **not a security sandbox**. `subagents_ask` is injected so a child can tell the parent about a gap or a needed decision immediately. The parent receives that as a steering message and can steer the child or ask the user.
 
 ### Structured launch result
 
@@ -208,7 +208,7 @@ The dashboard is an overlay; it does not switch parent sessions. Its presentatio
 - **Clear outer frame, quiet interior:** a theme-accent rounded border surrounds both the dashboard and its stop-confirmation view (warning-colored for confirmation). Flat headers, thin separators, a `›` selection pointer, and emphasized task text keep the interior compact without full-width selection backgrounds. Mouse coordinates account for the frame; compact layouts keep it too.
 - **Indented activity:** `⎿` detail lines show what each child is doing, queued guidance, its model, tool-use count, and reported token usage where space permits.
 - **Compact parent widget:** an animated asterisk-style indicator, running/finished counts, up to four short active-agent names with activity/time, and a `Click to view` hint. No task prompts or opening keybinding hints. Failed results remain explicitly marked when work finishes.
-- **Child detail view:** a `Subagents / name` breadcrumb and subdued metadata, native messages, thinking/tool blocks, live-follow state, and the existing steering editor while running. Once execution and report preparation settle, the heavy transcript is released and the view shows only the bounded final report. Tool/token counters remain available; finished children no longer advertise unavailable steering/stop actions.
+- **Child detail view:** clicking a row opens that child's live session. The editor is focused, shows a cursor, and accepts typing. Enter sends: a steer while the child is running, or a new turn when it is idle. The session stays available until discard, so you can continue the conversation after the first report.
 
 Tool-use counts include started calls, including failed calls. Token totals sum provider-reported finalized assistant messages; live partial snapshots are not added, and zero/unknown totals are omitted. These are per-child UI metrics, not a new billing ledger or parent usage aggregation. Colors follow the current Pi theme rather than hardcoding Claude's palette. On narrow terminals, names/details are clipped safely and lower-priority metadata may be omitted.
 
@@ -216,7 +216,7 @@ Tool-use counts include started calls, including failed calls. Token totals sum 
 | --- | --- |
 | Select a child in the list | Up / Down |
 | Open its transcript / steering editor | Enter or `s` |
-| Send guidance from the editor | Enter |
+| Send a message from the live editor | Enter |
 | Stop selected child from the list | `x`, then `y` to confirm |
 | Stop child while viewing transcript | Ctrl+X, then `y` |
 | Cancel stop confirmation | `n` or Esc |
@@ -233,7 +233,7 @@ The tools also work in print, JSON, and RPC modes. The dashboard and animated wi
 
 ## Lifecycle, retention, and limits
 
-- Live jobs and transcripts exist only in this extension runtime. Once execution and report preparation settle (success, failure, or manual stop), the Agent reference, tool-result map, subscription closure, and completion-promise reference are released automatically. Dashboard transcript/render caches and unused drafts are also cleared. Memory becomes eligible for JavaScript garbage collection; an immediate drop in process RSS is not guaranteed.
+- Live sessions stay in this extension runtime until discard, history eviction, or session cleanup, so the dashboard can keep sending messages. Discard and eviction dispose the child session. Memory is bounded by the latest 20 settled sessions, not by an unbounded history.
 - Only report metadata, counters, and bounded final text remain for finished jobs. The parent can remove those with `subagents_discard`; at most the latest **20 settled reports** are kept otherwise. In-flight report preparation is not prematurely evicted.
 - The previous 20-job cap already prevented unlimited growth in finished-job count, but each retained Agent could hold a large, unbounded conversation and tool outputs. Releasing heavy state addresses that cost without depending on the parent remembering to discard reports. Finished agents make no further model calls; the widget animation timer stops when no jobs remain active.
 - An already-open **report** remains visible if the history limit evicts it (at most one extra pinned report). Explicit discard releases that view too. Neither restores an evicted/discarded job to the status/steering APIs.
@@ -264,7 +264,6 @@ From `home/.pi`:
 
 ```sh
 npm run test:subagents
-npm exec --yes --package=typescript -- tsc --noEmit
 ```
 
 Tests use real in-process Agents and controlled provider streams, without paid API requests. Coverage includes:

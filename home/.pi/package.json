@@ -7,7 +7,8 @@
   "scripts": {
     "test:web-tools": "node --test agent/extensions/web-tools/tests/*.test.ts",
     "test:web-tools:live": "node agent/extensions/web-tools/tests/web-tools.live.ts",
-    "test:subagents": "node --test agent/extensions/subagents/subagents.test.ts"
+    "test:subagents": "node --test agent/extensions/subagents/tests/*.test.ts",
+    "test:subagents:live": "node --test agent/extensions/subagents/tests/process.test.ts"
   },
   "overrides": {
     "@earendil-works/pi-codemode": "1.3.0"
