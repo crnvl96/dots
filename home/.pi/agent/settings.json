@@ -3,6 +3,10 @@
   "lastChangelogVersion": "1.3.0",
   "defaultProvider": "radius",
   "defaultModel": "recursive/flint",
+  "defaultThinkingLevel": "high",
+  "modelThinkingLevels": {
+    "radius/recursive/flint": "low"
+  },
   "theme": "system",
   "hideThinkingBlock": true,
   "editorPaddingX": 1,
