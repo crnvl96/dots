@@ -17,7 +17,8 @@
     },
     "spacesheep": {
       "url": "https://mcp.spacesheep.dev/mcp",
-      "description": "Publish, read, and share spacesheep pages, and manage account settings"
+      "description": "Publish, read, and share spacesheep pages, and manage account settings",
+      "enabled": false
     }
   }
 }
