@@ -14,6 +14,10 @@
       "timeout": 180,
       "exposure": "direct",
       "description": "Perplexity web search, answers, research, and reasoning"
+    },
+    "spacesheep": {
+      "url": "https://mcp.spacesheep.dev/mcp",
+      "description": "Publish, read, and share spacesheep pages, and manage account settings"
     }
   }
 }
