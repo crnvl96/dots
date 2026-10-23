@@ -21,12 +21,5 @@
   ],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
-  "extensions": [],
-  "enabledModels": [
-    "openai/gpt-5.6-luna",
-    "openai/gpt-6-astra",
-    "openai/gpt-6.1-sol",
-    "xai/grok-4.7",
-    "recursive/flint"
-  ]
+  "extensions": []
 }
