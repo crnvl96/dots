@@ -12,9 +12,9 @@ const { getThemeByName } = await import(new URL(
 
 function job(overrides: Partial<Job> = {}): Job {
   return {
-    id: 'review-code', model: 'test', provider: 'test', prompt: 'Review', cwd: '.',
-    status: 'running', startedAt: 0, activity: 'Thinking', revision: 0,
-    pendingSteers: 0, asks: 0, tools: new Map(), cancelled: false, notification: 'pending',
+    id: 'review-code', model: 'test', provider: 'test', prompt: 'Review',
+    status: 'running', startedAt: 0, activity: 'Thinking',
+    pendingSteers: 0, tools: new Map(), cancelled: false, notification: 'pending',
     ...overrides,
   };
 }

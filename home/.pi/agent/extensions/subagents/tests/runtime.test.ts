@@ -12,9 +12,8 @@ import test from 'node:test';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { CustomEditor, DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
+import { AgentSession, CustomEditor, DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
 import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
-import { jobStats } from '../formatting.ts';
 import extension from '../index.ts';
 
 const parentModel = {
@@ -155,6 +154,33 @@ function useChildTools(h, tools) {
   }];
 }
 
+function observeChildLifecycle(t, h, shutdownGate) {
+  const started = new Set();
+  const stopped = new Set();
+  const disposed = new Set();
+  h.ctx.extensionFactories = [(pi) => {
+    let id;
+    pi.on('session_start', (_event, ctx) => {
+      id = ctx.sessionManager.getSessionId();
+      started.add(id);
+    });
+    pi.on('session_shutdown', async () => {
+      await shutdownGate;
+      await setImmediate(); // Teardown must await asynchronous extension cleanup.
+      assert.equal(stopped.has(id), false, 'Shutdown runs exactly once.');
+      stopped.add(id);
+    });
+  }];
+  const dispose = AgentSession.prototype.dispose;
+  t.mock.method(AgentSession.prototype, 'dispose', function () {
+    assert.ok(stopped.has(this.sessionId), 'Extension shutdown finishes before disposal.');
+    assert.equal(disposed.has(this.sessionId), false, 'Session is disposed exactly once.');
+    disposed.add(this.sessionId);
+    dispose.call(this);
+  });
+  return { started, stopped, disposed };
+}
+
 function system(request) {
   const message = request.context.messages.find((message) => message.role === 'system') ?? {};
   const sections = message.sections ? Object.values(message.sections).filter(Boolean).join('\n') : '';
@@ -243,22 +269,88 @@ test('finished jobs retain live sessions until discard and preserve bounded repo
   });
   await until(() => h.requests.length === 2);
   streamPartial(h.requests[1], 'partial response', 'private reasoning');
-  assert.ok(job.agent);
-  assert.ok(job.tools.size);
+  assert.ok(job.session);
+  assert.equal(job.tools.size, 0, 'Completed tool outputs are not retained in progress state.');
   h.requests[1].finish('small final report');
   const waited = await h.call('subagents_wait', { ids: [id] });
   assert.match(waited.structuredContent.agents[0].result, /small final report/);
-  assert.ok(job.agent, 'Finished sessions stay retained until discard or eviction.');
+  assert.ok(job.session, 'Finished sessions stay retained until discard or eviction.');
   assert.equal(typeof job.unsubscribe, 'function');
   assert.equal(job.done, undefined);
   assert.equal(screen(menu), '');
   await h.call('subagents_discard', { ids: [id] });
-  assert.equal(job.agent, undefined);
+  assert.equal(job.session, undefined);
   assert.equal(job.unsubscribe, undefined);
   assert.equal(job.tools.size, 0);
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
   assert.equal(h.notifications.length, 1); // Delivered report is not retracted.
 });
+
+test('discard, eviction and parent cleanup await child extension shutdown before disposal', async (t) => {
+  const h = harness(t);
+  const lifecycle = observeChildLifecycle(t, h);
+  const { structuredContent: { ids } } = await h.launch(Array.from({ length: 22 }, (_, i) => ({ prompt: `child ${i}`, tools: [] })));
+  await until(() => h.requests.length === 22);
+  for (const request of h.requests.slice(0, 21)) request.finish('finished');
+  await h.call('subagents_wait', { ids: ids.slice(0, 21) });
+  await until(() => lifecycle.disposed.size === 1); // The oldest finished session was evicted.
+  await h.call('subagents_discard', { ids: [ids[1]] });
+  assert.equal(lifecycle.disposed.size, 2);
+  await h.events.get('session_shutdown')();
+  assert.equal(h.requests[21].options.signal.aborted, true);
+  assert.equal(lifecycle.started.size, 22);
+  assert.deepEqual(lifecycle.stopped, lifecycle.started);
+  assert.deepEqual(lifecycle.disposed, lifecycle.started);
+  await h.events.get('session_shutdown')();
+  assert.equal(lifecycle.disposed.size, 22);
+});
+
+test('parent cleanup waits for an already-discarded child that is still shutting down', async (t) => {
+  const h = harness(t);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  const lifecycle = observeChildLifecycle(t, h, gate);
+  const { structuredContent: { ids } } = await h.launch([{ prompt: 'finish before cleanup', tools: [] }]);
+  await until(() => h.requests.length === 1);
+  h.requests[0].finish('finished');
+  await h.call('subagents_wait', { ids });
+  const discarding = h.call('subagents_discard', { ids });
+  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+  let cleaned = false;
+  const cleanup = h.events.get('session_shutdown')().then(() => { cleaned = true; });
+  await setImmediate();
+  assert.equal(cleaned, false);
+  assert.equal(lifecycle.disposed.size, 0);
+  release();
+  await Promise.all([discarding, cleanup]);
+  assert.deepEqual(lifecycle.disposed, lifecycle.started);
+});
+
+for (const failure of ['tool validation', 'extension binding']) {
+  test(`failed ${failure} shuts down and disposes every created session before rejecting launch`, async (t) => {
+    const h = harness(t);
+    const lifecycle = observeChildLifecycle(t, h);
+    if (failure === 'extension binding') {
+      const bind = AgentSession.prototype.bindExtensions;
+      t.mock.method(AgentSession.prototype, 'bindExtensions', async function (options) {
+        await bind.call(this, options);
+        throw new Error('binding failed');
+      });
+    }
+    await assert.rejects(h.launch([
+      { name: 'first-child', prompt: 'valid', tools: [] },
+      { name: 'second-child', prompt: 'invalid', tools: ['missing-tool'] },
+    ]), failure === 'tool validation' ? /Unavailable subagent tool/ : /binding failed/);
+    assert.equal(lifecycle.started.size, failure === 'tool validation' ? 2 : 1);
+    assert.deepEqual(lifecycle.stopped, lifecycle.started);
+    assert.deepEqual(lifecycle.disposed, lifecycle.started);
+    assert.equal(h.requests.length, 0);
+    assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
+    await h.events.get('session_shutdown')();
+    assert.deepEqual(lifecycle.disposed, lifecycle.started);
+  });
+}
 
 test('discard validates the full batch, rejects unfinished jobs and removes only selected finished reports', async (t) => {
   const h = harness(t);
@@ -312,10 +404,10 @@ for (const stopReason of ['error', 'aborted']) {
     assert.equal(result.notification, 'failed');
     assert.equal(result.status, 'failed');
     assert.match(result.result, /recoverable findings/);
-    assert.ok(job.agent);
+    assert.ok(job.session);
     assert.equal(typeof job.unsubscribe, 'function');
     await h.call('subagents_discard', { ids: [id] });
-    assert.equal(job.agent, undefined);
+    assert.equal(job.session, undefined);
     assert.equal(job.unsubscribe, undefined);
   });
 }
@@ -714,6 +806,27 @@ test('validates the entire batch before starting any child', async (t) => {
   assert.equal(h.notifications.length, 0);
 });
 
+for (const recovered of [true, false]) {
+  test(`automatic retry ${recovered ? 'success completes' : 'exhaustion fails'} based on the final outcome`, async (t) => {
+    const h = harness(t);
+    const settings = h.pi.getSettings();
+    h.pi.getSettings = () => ({ ...settings, retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
+    const { structuredContent: { ids: [id] } } = await h.launch([{ prompt: 'retry transient failures', tools: [] }]);
+    await until(() => h.requests.length === 1);
+    h.requests[0].finish('first attempt', 'error', { errorMessage: '503 Service Unavailable' });
+    await until(() => h.requests.length === 2);
+    assert.equal(h.notifications.length, 0, 'An intermediate failure is not a final report.');
+    if (recovered) h.requests[1].finish('Success after retry');
+    else h.requests[1].finish('final partial output', 'error', { errorMessage: '503 retry exhausted' });
+    const { structuredContent: { agents: [job] } } = await h.call('subagents_wait', { ids: [id] });
+    assert.equal(job.status, recovered ? 'completed' : 'failed');
+    assert.equal(job.error, recovered ? null : '503 retry exhausted');
+    assert.match(job.result, recovered ? /Success after retry/ : /final partial output/);
+    assert.equal(h.requests.length, 2);
+    assert.equal(h.notifications.length, 1);
+  });
+}
+
 test('reports provider failure once, including error details and any text response', async (t) => {
   const h = harness(t);
   await h.launch([{ prompt: 'fail' }]);
@@ -906,8 +1019,7 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   }
   const menu = h.widgets.get('subagents.pi');
   const job = menu.actions.jobs().find(job => job.id === id);
-  assert.equal(job.tools.get('slow-tool').running, true);
-  assert.match(JSON.stringify(job.tools.get('slow-tool').result), /partial tool output/);
+  assert.equal(job.tools.get('slow-tool'), 'slow_read');
   await h.steer(id, 'queued but must not run');
   assert.equal(menu.handleInput('\x18'), true);
   assert.equal(childSignal.aborted, true);
@@ -940,25 +1052,35 @@ test('inline menu fits narrow widths, Unicode tasks and short terminals', async 
   }
 });
 
-test('child counters use actual tool calls and finalized tokens', async (t) => {
+test('progress tracks only running tool IDs and names, not outputs or history', async (t) => {
   const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect usage counters' }]);
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  t.after(() => release());
+  useChildTools(h, {
+    slow_read: async (_id, _args, _signal, onUpdate) => {
+      onUpdate?.({ content: [{ type: 'text', text: 'private tool output' }], details: {} });
+      await gate;
+      return { content: [{ type: 'text', text: 'finished tool output' }], details: {} };
+    },
+  });
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Read a file' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
   const job = menu.actions.jobs().find(job => job.id === id);
-  const partial = streamPartial(h.requests[0], 'Working');
-  partial.usage.totalTokens = 999999;
-  assert.doesNotMatch(jobStats(job), /tokens/); // No estimates from in-flight snapshots.
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'counter-read', name: 'read', arguments: { path: 'example.ts' } }],
-    usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 1200,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
+    content: [{ type: 'toolCall', id: 'active-read', name: 'slow_read', arguments: {} }],
   });
+  await until(() => job.tools.size === 1);
+  assert.deepEqual([...job.tools], [['active-read', 'slow_read']]);
+  assert.match(job.activity, /Running slow_read/);
+  release();
   await until(() => h.requests.length === 2);
-  assert.match(jobStats(job), /1 tool use · 1\.2K tokens/);
+  assert.equal(job.tools.size, 0);
+  assert.doesNotMatch(job.activity, /Running/);
   h.requests[1].finish('Finished');
-  await until(() => h.notifications.length === 1);
-  assert.match(jobStats(job), /1 tool use · 1\.2K tokens/);
+  await h.call('subagents_wait', { ids: [id] });
+  assert.equal(job.tools.size, 0);
   assert.equal(screen(menu), '');
 });
 
@@ -1053,7 +1175,7 @@ test('bounded history evicts in completion order even when timestamps tie', asyn
   const retained = (await h.call('subagents_status', {})).structuredContent.agents;
   assert.deepEqual(retained.map(job => job.id), completed.slice(1));
   await assert.rejects(h.call('subagents_status', { id }), /Unknown or no longer retained/);
-  assert.equal(job.agent, undefined);
+  assert.equal(job.session, undefined);
   assert.equal(job.unsubscribe, undefined);
   assert.equal(screen(menu), '');
 });

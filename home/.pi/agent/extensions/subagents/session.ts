@@ -1,12 +1,12 @@
-import type { Agent, ThinkingLevel } from '@earendil-works/pi-agent-core';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import {
   createAgentSession, createCodemodeExtension, createMcpExtension, createToolSearchExtension,
   DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
-  type AgentSession, type ExtensionAPI, type ExtensionFactory, type ExtensionToolContext, type InlineExtension,
+  type AgentSession, type ExtensionAPI, type ExtensionToolContext, type InlineExtension,
 } from '@earendil-works/pi-coding-agent';
 import { config } from './config.ts';
-import type { TaskInput } from './contracts.ts';
+import { lastAssistantText, type TaskInput } from './contracts.ts';
 import { definitionPrompt, type AgentDefinition } from './definitions.ts';
 import { askTool } from './feedback.ts';
 import { childPromptAppendix } from './prompts.ts';
@@ -22,10 +22,8 @@ export interface OpenChildInput {
 
 export interface OpenedChild {
   session: AgentSession;
-  agent: Agent;
   modelId: string;
   provider: string;
-  hardExit: { hit: boolean };
 }
 
 interface HostContext extends ExtensionToolContext {
@@ -52,16 +50,13 @@ function parentRuntime(ctx: ExtensionToolContext) {
   };
 }
 
-function hardExitExtension(clear: { run: () => void }, hardExit: { hit: boolean }): ExtensionFactory {
-  return (pi) => {
-    pi.on('agent_end', (event) => {
-      const last = [...event.messages].reverse().find((message) => message.role === 'assistant');
-      if (last?.role === 'assistant' && (last.stopReason === 'error' || last.stopReason === 'aborted')) {
-        hardExit.hit = true;
-        clear.run();
-      }
-    });
-  };
+/** dispose() alone does not run extension cleanup in Pi 1.4.0. */
+export async function closeChildSession(session: AgentSession) {
+  try {
+    await session.extensionRunner.emit({ type: 'session_shutdown', reason: 'quit' });
+  } finally {
+    session.dispose();
+  }
 }
 
 /** Preserve the parent prompt; the selected role is inserted by the runtime, not read on request by the model. */
@@ -98,7 +93,6 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     { projectTrusted: input.ctx.isProjectTrusted?.() ?? true },
   );
   const clear = { run: () => {} };
-  const hardExit = { hit: false };
   const asked = askTool((feedback) => input.onAsk(feedback.message, feedback.kind));
   const explicitTools = task.tools === undefined ? undefined
     : task.tools.length === 0 ? []
@@ -117,7 +111,10 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
       // The MCP extension reads getAgentDir(), not the session directory. Isolated children
       // (tests and embeds that pass agentDir) must not connect to the user's live servers.
       ...(isolated ? [] : [createMcpExtension()]),
-      hardExitExtension(clear, hardExit),
+      (pi) => {
+        // Queued guidance must not restart a failed run. SDK retries still decide recovery.
+        pi.on('agent_end', (event) => { if (lastAssistantText(event.messages).error) clear.run(); });
+      },
       (pi) => { if (explicitTools === undefined || explicitTools.includes(config.askTool)) pi.registerTool(asked); },
       ...(host.extensionFactories ?? []),
       // After inherited extensions so a rebuilt child prompt cannot replace the parent's text.
@@ -143,13 +140,18 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     scopedModels: input.ctx.scopedModels?.map((scoped) => ({ model: scoped.model, thinkingLevel: scoped.thinkingLevel })),
     ...(explicitTools ? { tools: explicitTools } : {}),
   });
-  await session.bindExtensions({});
-  if (explicitTools) {
-    const enabled = new Set(session.getActiveToolNames());
-    for (const name of task.tools ?? []) {
-      if (!enabled.has(name)) throw new Error(`Unavailable subagent tool: ${name}`);
+  try {
+    await session.bindExtensions({});
+    if (explicitTools) {
+      const enabled = new Set(session.getActiveToolNames());
+      for (const name of task.tools ?? []) {
+        if (!enabled.has(name)) throw new Error(`Unavailable subagent tool: ${name}`);
+      }
     }
+    clear.run = () => session.agent.clearAllQueues();
+    return { session, modelId: model.id, provider: model.provider };
+  } catch (error) {
+    await closeChildSession(session);
+    throw error;
   }
-  clear.run = () => session.agent.clearAllQueues();
-  return { session, agent: session.agent, modelId: model.id, provider: model.provider, hardExit };
 }

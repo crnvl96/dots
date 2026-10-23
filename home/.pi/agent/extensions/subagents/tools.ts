@@ -105,7 +105,7 @@ export function registerTools(pi: ExtensionAPI, runtime: Runtime) {
         if (!job.settled || job.status === 'running' || job.status === 'stopping') throw new Error(`Subagent has not finished execution and report preparation: ${id}`);
         return job;
       });
-      runtime.discard(selected);
+      await runtime.discard(selected);
       return {
         content: [{ type: 'text', text: `Discarded finished subagents: ${params.ids.join(', ')}.` }],
         details: { ids: params.ids }, structuredContent: { ids: params.ids },

@@ -1,39 +1,37 @@
-import type { AgentEvent, ThinkingLevel } from '@earendil-works/pi-agent-core';
-import { truncateHead, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from '@earendil-works/pi-coding-agent';
+import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
+import { truncateHead, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth } from '@earendil-works/pi-tui';
 import { config } from './config.ts';
 import { catalogForContext } from './catalog.ts';
 import { active, lastAssistantText, type FeedbackKind, type Job } from './contracts.ts';
 import { deliverFeedback } from './feedback.ts';
-import { boundedReport, jobStats, oneLine, snapshot } from './formatting.ts';
-import { openChildSession, resolveModel } from './session.ts';
+import { boundedReport, oneLine, snapshot } from './formatting.ts';
+import { closeChildSession, openChildSession, resolveModel } from './session.ts';
 import type { TaskInput } from './contracts.ts';
 
 export interface Runtime {
   jobs: Map<string, Job>;
-  usedNames: Set<string>;
   subscribe: (listener: () => void) => () => void;
   launch: (tasks: TaskInput[], signal: AbortSignal | undefined, ctx: ExtensionToolContext) => Promise<Job[]>;
   steer: (job: Job, prompt: string) => void;
-  send: (job: Job, prompt: string) => void;
   stop: (job: Job) => void;
   waitFor: (selected: Job[], signal?: AbortSignal, timeoutMs?: number) => Promise<boolean>;
-  discard: (selected: Job[]) => void;
+  discard: (selected: Job[]) => Promise<void>;
   refresh: () => void;
   attachUI: (ctx: ExtensionContext) => void;
   setAttachUI: (attach: (ctx: ExtensionContext) => void) => void;
-  setCloseUI: (close: () => void) => void;
 }
 
 export function createRuntime(pi: ExtensionAPI): Runtime {
   const jobs = new Map<string, Job>();
   const usedNames = new Set<string>();
+  // Discarded/evicted jobs may still be awaiting extension shutdown.
+  const releasing = new Set<Promise<void>>();
   const listeners = new Set<() => void>();
   let finishedOrder = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let uiContext: ExtensionContext | undefined;
   let attachUI = (_ctx: ExtensionContext) => {};
-  let closeUI = () => {};
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => { listeners.delete(listener); };
@@ -55,39 +53,32 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   function release(job: Job) {
     job.unsubscribe?.();
     job.unsubscribe = undefined;
-    job.session?.dispose();
+    const session = job.session;
     job.session = undefined;
-    job.agent = undefined;
     job.tools.clear();
     job.done = undefined;
+    if (!session) return Promise.resolve();
+    const closing = closeChildSession(session).catch((error) => {
+      console.error(`subagents.pi: could not close ${job.id}:`, error);
+    });
+    releasing.add(closing);
+    return closing.finally(() => { releasing.delete(closing); });
   }
 
-  function prune() {
+  async function prune() {
     const finished = [...jobs.values()].filter((job) => job.settled).sort((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
-    for (const job of finished.slice(config.historyLimit)) {
-      release(job);
-      jobs.delete(job.id);
-    }
+    await discard(finished.slice(config.historyLimit));
   }
 
-  function progress(job: Job, event: AgentEvent) {
-    job.revision++;
-    if (event.type === 'tool_execution_start') job.tools.set(event.toolCallId, { name: event.toolName, running: true, revision: job.revision });
-    if (event.type === 'tool_execution_update' || event.type === 'tool_execution_end') {
-      const final = event.type === 'tool_execution_end';
-      const result = final ? event.result : event.partialResult;
-      job.tools.set(event.toolCallId, {
-        name: event.toolName, running: !final, revision: job.revision,
-        result: { ...result, isError: final ? event.isError : false, ...(final ? { durationMs: event.durationMs } : {}) },
-      });
-    }
+  function progress(job: Job, event: AgentSessionEvent) {
+    if (event.type === 'tool_execution_start') job.tools.set(event.toolCallId, event.toolName);
+    if (event.type === 'tool_execution_end') job.tools.delete(event.toolCallId);
     if (event.type === 'message_start' && event.message.role === 'user') {
       if (job.hasPrompt && job.pendingSteers) job.pendingSteers--;
       job.hasPrompt = true;
     }
     if (job.status === 'running') {
-      const tools = [...job.tools.values()].filter((tool) => tool.running);
-      job.activity = tools.length ? `Running ${tools.map((tool) => tool.name).join(', ')}`
+      job.activity = job.tools.size ? `Running ${[...job.tools.values()].join(', ')}`
         : event.type === 'message_update' && event.assistantMessageEvent.type.startsWith('thinking') ? 'Thinking'
           : event.type === 'message_update' ? 'Writing response' : 'Working';
     }
@@ -102,7 +93,6 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     job.finishedOrder = ++finishedOrder;
     job.pendingSteers = 0;
     job.activity = job.status === 'stopped' ? 'Stopped by user' : error ?? 'Finished';
-    job.revision++;
     refresh();
     const report = await boundedReport(job, response, error);
     if (job.cancelled) return;
@@ -124,16 +114,15 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     }
   }
 
-  async function run(job: Job, prompt = job.prompt) {
+  async function run(job: Job) {
     const session = job.session!;
     let response = '';
     let error: string | undefined;
     try {
-      await session.prompt(prompt);
+      await session.prompt(job.prompt);
       const outcome = lastAssistantText(session.messages);
       response = outcome.text;
       error = outcome.error;
-      if (job.hardExit && !error) error = job.error ?? 'Subagent stopped after a provider error.';
     } catch (failure) {
       error = failure instanceof Error ? failure.message : String(failure);
     }
@@ -143,24 +132,15 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
 
   function watch(job: Job) {
     const session = job.session!;
-    job.unsubscribe = session.subscribe((event) => {
-      if (event.type === 'agent_end' || event.type === 'agent_settled' || event.type === 'queue_update' || event.type === 'compaction_start' || event.type === 'compaction_end' || event.type === 'auto_retry_start' || event.type === 'auto_retry_end') {
-        job.revision++;
-        refresh();
-        return;
-      }
-      progress(job, event);
-    });
+    job.unsubscribe = session.subscribe((event) => progress(job, event));
     job.done = run(job).catch((failure) => {
       job.notification = 'failed';
       job.notificationError = failure instanceof Error ? failure.message : String(failure);
       console.error(`subagents.pi: could not deliver ${job.id}:`, failure);
-    }).finally(() => {
-      job.stats = jobStats(job);
+    }).finally(async () => {
       job.done = undefined;
       job.settled = true;
-      job.revision++;
-      prune();
+      await prune();
       refresh();
     });
   }
@@ -177,38 +157,6 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     refresh();
   }
 
-  function send(job: Job, prompt: string) {
-    if (!prompt.trim()) throw new Error('Message must not be blank.');
-    if (jobs.get(job.id) !== job || job.cancelled || !job.session) throw new Error(`Subagent is not available: ${job.id}`);
-    if (job.status === 'running' || job.session.isStreaming) {
-      steer(job, prompt);
-      return;
-    }
-    job.status = 'running';
-    job.settled = false;
-    job.hardExit = false;
-    job.error = undefined;
-    job.finishedAt = undefined;
-    job.notification = 'pending';
-    job.notificationError = undefined;
-    job.activity = 'Starting';
-    job.result = undefined;
-    job.pendingSteers = 0;
-    job.done = run(job, prompt).catch((failure) => {
-      job.notification = 'failed';
-      job.notificationError = failure instanceof Error ? failure.message : String(failure);
-      console.error(`subagents.pi: could not deliver ${job.id}:`, failure);
-    }).finally(() => {
-      job.stats = jobStats(job);
-      job.done = undefined;
-      job.settled = true;
-      job.revision++;
-      prune();
-      refresh();
-    });
-    refresh();
-  }
-
   function stop(job: Job) {
     if (jobs.get(job.id) !== job || job.status !== 'running' || !job.session) return;
     job.status = 'stopping';
@@ -220,9 +168,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   }
 
   function ask(job: Job, message: string, kind: FeedbackKind) {
-    job.asks++;
     job.activity = kind === 'decision' ? 'Needs a decision' : 'Found a gap';
-    job.revision++;
     refresh();
     deliverFeedback(pi, { id: job.id, kind, message });
   }
@@ -266,24 +212,19 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
           },
         });
         const job: Job = {
-          id: task.name, session: child.session, agent: child.agent,
-          model: child.modelId, provider: child.provider, prompt: task.prompt, cwd: ctx.cwd,
+          id: task.name, session: child.session,
+          model: child.modelId, provider: child.provider, prompt: task.prompt,
           ...(definition ? { agentType: definition.name, agentFile: definition.filePath } : {}),
           cancelled: false, status: 'running', startedAt: Date.now(), activity: 'Starting',
-          revision: 0, pendingSteers: 0, asks: 0, tools: new Map(), notification: 'pending',
+          pendingSteers: 0, tools: new Map(), notification: 'pending',
         };
-        Object.defineProperty(job, 'hardExit', { get: () => child.hardExit.hit, set: (value) => { child.hardExit.hit = value; } });
         opened.push(job);
       }
+      signal?.throwIfAborted();
     } catch (error) {
-      for (const job of opened) release(job);
+      await Promise.all(opened.map(release));
       for (const name of reserved) usedNames.delete(name);
       throw error;
-    }
-    if (signal?.aborted) {
-      for (const job of opened) release(job);
-      for (const name of reserved) usedNames.delete(name);
-      signal.throwIfAborted();
     }
     for (const job of opened) {
       jobs.set(job.id, job);
@@ -317,12 +258,9 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     });
   }
 
-  function discard(selected: Job[]) {
-    for (const job of selected) {
-      job.discarded = true;
-      release(job);
-      jobs.delete(job.id);
-    }
+  async function discard(selected: Job[]) {
+    for (const job of selected) jobs.delete(job.id);
+    await Promise.all(selected.map(release));
     refresh();
   }
 
@@ -331,18 +269,17 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     jobs.clear();
     usedNames.clear();
     if (timer) { clearInterval(timer); timer = undefined; }
-    closeUI();
     uiContext?.ui.setWidget(config.widgetId, undefined);
     uiContext = undefined;
     for (const job of pending) {
       job.cancelled = true;
       job.unsubscribe?.();
-      job.agent?.clearAllQueues();
+      job.session?.agent.clearAllQueues();
       void job.session?.abort();
     }
     refresh();
     await Promise.allSettled(pending.map((job) => job.done));
-    for (const job of pending) release(job);
+    await Promise.all([...releasing, ...pending.map(release)]);
   }
 
   pi.on('session_shutdown', cleanup);
@@ -350,7 +287,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   pi.on('session_tree', cleanup);
 
   return {
-    jobs, usedNames, subscribe, launch, steer, send, stop, waitFor, discard, refresh,
+    jobs, subscribe, launch, steer, stop, waitFor, discard, refresh,
     attachUI: (ctx) => {
       if (ctx.mode !== 'tui' || uiContext) return;
       uiContext = ctx;
@@ -358,7 +295,6 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
       refresh();
     },
     setAttachUI: (attach) => { attachUI = attach; },
-    setCloseUI: (close) => { closeUI = close; },
   };
 }
 

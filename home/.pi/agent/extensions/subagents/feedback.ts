@@ -7,7 +7,7 @@ import { askDescription } from './prompts.ts';
 
 export function feedbackMessage(feedback: Feedback) {
   const need = feedback.kind === 'decision' ? 'needs a decision' : 'found a gap';
-  return `Subagent ${feedback.id} ${need}.\n\n${feedback.message}\n\nSteer ${feedback.id} with the answer, or ask the user and then steer. Do not wait for the final report.`;
+  return `Subagent ${feedback.id} ${need}.\n\n${feedback.message}\n\nSteer ${feedback.id} with the answer only while it is running. If it finishes, launch a fresh task with the answer and relevant findings; finished children cannot resume. Ask the user if needed. Do not ignore this request.`;
 }
 
 export function deliverFeedback(pi: ExtensionAPI, feedback: Feedback) {
@@ -19,26 +19,28 @@ export function deliverFeedback(pi: ExtensionAPI, feedback: Feedback) {
   }, { triggerTurn: true, deliverAs: 'steer' });
 }
 
-export function askTool(onAsk: (feedback: Feedback) => void): ToolDefinition {
+const AskSchema = Type.Object({
+  message: Type.String({ minLength: 1, description: 'The gap or the decision you need, including the options if you have them.' }),
+  kind: Type.Optional(StringEnum(['gap', 'decision'] as const)),
+});
+
+export function askTool(onAsk: (feedback: Feedback) => void): ToolDefinition<typeof AskSchema> {
   return {
     name: config.askTool,
     label: 'Ask parent',
     description: askDescription,
     promptGuidelines: [
       'Call this as soon as a missing decision or a discovered gap blocks useful work.',
-      'The parent is notified immediately. Stop after asking if you cannot continue without the answer.',
+      'The parent is notified immediately. If blocked, return your findings and stop; this finishes your task, not a pause.',
     ],
-    parameters: Type.Object({
-      message: Type.String({ minLength: 1, description: 'The gap or the decision you need, including the options if you have them.' }),
-      kind: Type.Optional(StringEnum(['gap', 'decision'] as const)),
-    }),
+    parameters: AskSchema,
     async execute(_toolCallId, params) {
       const message = params.message.trim();
       if (!message) throw new Error('Ask message must not be blank.');
       const kind: FeedbackKind = params.kind === 'decision' ? 'decision' : 'gap';
       onAsk({ id: '', kind, message });
       return {
-        content: [{ type: 'text', text: 'Parent notified. If you need a decision before continuing, stop now. Guidance will arrive as a user message.' }],
+        content: [{ type: 'text', text: 'Parent notified. If blocked, return your findings and stop. This finishes your task; the parent can launch a fresh task with the answer.' }],
         details: { delivered: true, kind },
       };
     },
