@@ -14,21 +14,19 @@
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
   "extensions": [],
-  "defaultProvider": "xai",
-  "defaultModel": "grok-4.7",
+  "defaultProvider": "openai",
+  "defaultModel": "gpt-6.1-sol",
   "defaultThinkingLevel": "high",
   "enabledModels": [
     "openai/gpt-6-astra",
     "openai/gpt-6.1-sol",
     "openai/gpt-5.6-luna",
-    "xai/grok-4.7",
     "radius/recursive/flint"
   ],
   "modelThinkingLevels": {
     "openai/gpt-6-astra": "high",
     "openai/gpt-6.1-sol": "high",
     "openai/gpt-5.6-luna": "high",
-    "xai/grok-4.7": "high",
     "radius/recursive/flint": "low"
   }
 }
