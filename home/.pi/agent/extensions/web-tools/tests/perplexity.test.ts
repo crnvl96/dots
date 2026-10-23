@@ -1,11 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { config } from '../config.ts';
-import { createPerplexityProvider, parseFetch, parseSearch, toUsage } from '../providers/perplexity.ts';
+import { createPerplexity, parseFetch, parseSearch, toUsage } from '../perplexity.ts';
 
 const searchInput = { query: 'pi release', max_results: 8, search_context_size: 'medium' as const };
 const fetchInput = { url: 'https://example.com/', objective: 'Extract main content.' };
-const ctx = { async getApiKey() { throw new Error('Perplexity must not access Pi credentials'); } };
 function fixture(t: any) {
   const settings = structuredClone(config.perplexity);
   settings.apiKeyEnv = 'WEB_TEST_PERPLEXITY_KEY';
@@ -18,7 +17,7 @@ function fixture(t: any) {
     if (previous === undefined) delete process.env[settings.apiKeyEnv]; else process.env[settings.apiKeyEnv] = previous;
     if (previousBase === undefined) delete process.env[settings.baseUrlEnv]; else process.env[settings.baseUrlEnv] = previousBase;
   });
-  return { settings, provider: createPerplexityProvider(settings) };
+  return { settings, provider: createPerplexity(settings) };
 }
 function pagePayload(snippet = 'Provider page excerpt.') {
   return { id: 'fetch-id', model: 'agent-model', status: 'completed', usage: { input_tokens: 10, output_tokens: 5, cost: { total_cost: 0.02 } }, output: [
@@ -39,7 +38,7 @@ test('search uses direct API, configurable base/key, forwards controls, and send
     assert.deepEqual(JSON.parse(init.body), { query: searchInput.query, max_results: 3, search_context_size: 'high', search_recency_filter: 'month' });
     return Response.json({ id: 'search-id', results: [{ title: 'Result', url: 'https://example.com', snippet: 'Source excerpt', date: '2026-01-01' }] });
   });
-  const output = await provider.search({ ...searchInput, max_results: 3, search_context_size: 'high', recency: 'month' }, ctx);
+  const output = await provider.search({ ...searchInput, max_results: 3, search_context_size: 'high', recency: 'month' });
   assert.equal(count, 1);
   assert.equal(output.result.report, null);
   assert.equal(output.result.metadata.retrieval_evidence, 'direct_response');
@@ -69,30 +68,33 @@ test('fetch request isolates inputs, only exposes fetch_url and obeys config', a
     assert.match(body.instructions, /untrusted data/);
     return Response.json(pagePayload());
   });
-  const output = await provider.fetch(fetchInput, ctx);
+  const output = await provider.fetch(fetchInput);
   assert.equal(output.result.status, 'ok');
   assert.equal(output.result.content, 'Provider page excerpt.');
   assert.equal(output.result.report, 'Separate model notes.');
   assert.equal(output.result.metadata.retrieval_evidence, 'tool_result');
-  assert.equal(output.result.metadata.tool_calls, null);
   assert.equal(output.usage?.totalTokens, 15);
   assert.equal(output.usage?.cost.total, 0.02);
 });
-test('missing and whitespace credentials fail before network and never use Pi fallback', async t => {
+test('missing and whitespace credentials fail before network', async t => {
   const { settings, provider } = fixture(t);
   let calls = 0;
   t.mock.method(globalThis, 'fetch', async () => { calls++; throw new Error('unexpected'); });
   for (const key of ['', '   ']) {
     process.env[settings.apiKeyEnv] = key;
-    await assert.rejects(provider.validate(ctx), { code: 'authentication' });
-    await assert.rejects(provider.search(searchInput, ctx), { code: 'authentication' });
+    await assert.rejects(provider.search(searchInput), { code: 'authentication' });
+    await assert.rejects(provider.fetch(fetchInput), { code: 'authentication' });
   }
   assert.equal(calls, 0);
 });
 test('local invalid config fails without network', async t => {
   const { settings, provider } = fixture(t);
+  t.mock.method(globalThis, 'fetch', async () => { throw new Error('unexpected'); });
   settings.timeoutMs = 0;
-  await assert.rejects(provider.validate(ctx), { code: 'configuration' });
+  await assert.rejects(provider.search(searchInput), { code: 'configuration' });
+  settings.timeoutMs = 1_000;
+  settings.fetch.preset = ' ';
+  await assert.rejects(provider.fetch(fetchInput), { code: 'configuration' });
 });
 test('blank base override uses configured base URL', async t => {
   const { settings, provider } = fixture(t);
@@ -101,7 +103,7 @@ test('blank base override uses configured base URL', async t => {
     assert.equal(url, 'https://api.perplexity.ai/search');
     return Response.json({ results: [] });
   });
-  assert.equal((await provider.search(searchInput, ctx)).result.status, 'not_found');
+  assert.equal((await provider.search(searchInput)).result.status, 'not_found');
 });
 test('search rejects malformed payload, filters malformed sources, preserves empty excerpts and dates', () => {
   for (const payload of [{}, { results: null }, { results: [null, { url: 'invalid', snippet: '' }] }]) {

@@ -8,14 +8,10 @@ import { untrustedWarning } from './prompts.ts';
 
 export function formatResult(result: RetrievalResult): string {
   const input = result.operation === 'search' ? result.query : result.url;
-  const parts = [untrustedWarning, '', `# Web ${result.operation}`, `Provider: ${result.provider ?? 'not selected'}`, `Input: ${input}`, `Status: ${result.status}`];
+  const parts = [untrustedWarning, '', `# Web ${result.operation}`, `Input: ${input}`, `Status: ${result.status}`];
   if (result.error) parts.push(`Error (${result.error.code}): ${result.error.message}`);
   for (const warning of result.warnings) parts.push(`Warning: ${warning}`);
   parts.push(`Retrieval evidence: ${result.metadata.retrieval_evidence}`, `Source order: ${result.metadata.result_order}`);
-  if (result.metadata.ranking) {
-    const ranking = result.metadata.ranking;
-    parts.push(`Relevance selection: ${ranking.model} (${ranking.status}; ${ranking.selected}/${ranking.candidates} excerpts selected)`);
-  }
   parts.push('', '## Provider source excerpts');
   if (!result.sources.length) parts.push('No provider source excerpts returned.');
   for (const [i, source] of result.sources.entries()) {
@@ -24,8 +20,8 @@ export function formatResult(result: RetrievalResult): string {
     if (source.last_updated) parts.push(`Updated: ${source.last_updated}`);
     parts.push('', source.snippet ?? '(No excerpt provided.)', '');
   }
-  if (result.operation === 'fetch' && result.content === null) parts.push('No provider excerpt matched the requested URL; any report below is model-processed, not verified page text.');
-  if (result.report !== null) parts.push('', '## Model-written retrieval report / notes', result.report);
+  if (result.operation === 'fetch' && result.content === null) parts.push('No provider excerpt matched the requested URL; any notes below are model-written, not verified page text.');
+  if (result.report !== null) parts.push('', '## Model-written fetch notes', result.report);
   return parts.join('\n');
 }
 export async function formatAndTruncate(result: RetrievalResult, limits: WebToolsConfig['output']) {

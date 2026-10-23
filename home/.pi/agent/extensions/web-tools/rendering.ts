@@ -1,9 +1,8 @@
 import type { Theme } from '@earendil-works/pi-coding-agent';
 import { Text } from '@earendil-works/pi-tui';
-import type { Operation, ProviderId, ToolResultData } from './contracts.ts';
+import type { Operation, ToolResultData } from './contracts.ts';
 
 export interface Details {
-  provider: ProviderId | null;
   operation: Operation;
   result?: ToolResultData;
 }
@@ -16,18 +15,17 @@ export function renderResult(
   theme: Theme,
 ) {
   const { details } = output;
-  if (options.isPartial) return new Text(theme.fg('warning', `${details?.operation === 'fetch' ? 'Fetching' : 'Searching'} with ${details?.provider ?? 'web provider'}…`), 0, 0);
+  if (options.isPartial) return new Text(theme.fg('warning', `${details?.operation === 'fetch' ? 'Fetching' : 'Searching'} with Perplexity…`), 0, 0);
   const result = details?.result;
   if (!result) return new Text(theme.fg('error', 'Web retrieval failed'), 0, 0);
   const failed = output.isError || result.status === 'error';
   const missing = result.status === 'not_found';
-  let summary = failed ? `Web retrieval failed: ${result.error?.message ?? 'provider reported an error'}`
+  const summary = failed ? `Web retrieval failed: ${result.error?.message ?? 'provider reported an error'}`
     : missing ? 'No relevant content found'
     : result.operation === 'search'
-      ? `${result.results.length} ${result.metadata.result_order === 'ranked' ? 'ranked result(s)' : 'source citation(s)'}${result.results.length ? '' : ' (model report only)'}`
-      : result.content === null ? 'Model report only; no matching provider excerpt'
+      ? `${result.results.length} result(s)`
+      : result.content === null ? 'No matching provider excerpt'
         : `Retrieved ${result.title ?? result.url} (${result.content.length.toLocaleString()} provider-excerpt characters)`;
-  summary = `[${result.provider ?? 'no provider'}] ${summary}`;
   let text = theme.fg(failed ? 'error' : missing ? 'warning' : 'success', summary);
   if (result.full_output_path) text += theme.fg('warning', ' (truncated)');
   if (options.expanded) {
@@ -36,12 +34,7 @@ export function renderResult(
     for (const warning of result.warnings) text += `\n${theme.fg('warning', warning)}`;
     if ((failed || missing) && result.report) text += `\n${theme.fg('muted', result.report)}`;
     text += `\n${theme.fg('dim', `Evidence: ${result.metadata.retrieval_evidence}`)}`;
-    if (result.metadata.ranking) {
-      const ranking = result.metadata.ranking;
-      text += `\n${theme.fg('dim', `Relevance: ${ranking.model} (${ranking.status}; ${ranking.selected}/${ranking.candidates} selected)`)}`;
-    }
     if (result.metadata.model) text += `\n${theme.fg('dim', `Model: ${result.metadata.model}`)}`;
-    if (result.metadata.tool_calls !== null) text += `\n${theme.fg('dim', `Server tool calls: ${result.metadata.tool_calls}`)}`;
     if (result.metadata.cost_usd !== null) text += `\n${theme.fg('dim', `API cost: $${result.metadata.cost_usd.toFixed(6)}`)}`;
     if (result.full_output_path) text += `\n${theme.fg('dim', `Full output: ${result.full_output_path}`)}`;
   }
