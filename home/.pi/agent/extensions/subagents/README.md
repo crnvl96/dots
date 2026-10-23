@@ -1,6 +1,6 @@
 # subagents
 
-An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
+An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents in Pi's interactive TUI. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
 
 Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. `definitions.ts` discovers reusable agent definitions; `catalog.ts` advertises them to the parent. Session/runtime/tool modules handle launches, and a compact inline menu displays active jobs.
 
@@ -37,10 +37,10 @@ The extension discovers Markdown agent definitions automatically, advertises the
 
 Discovery recursively scans:
 
-- User: `~/.agents/agents/` and `~/.claude/agents/`.
-- Trusted project: `.agents/agents/` and `.claude/agents/` from the working directory up to the nearest repository root (`.git` directory or worktree file). Outside a repository, only the working directory is scanned.
+- User: `~/.agents/agents/`.
+- Trusted project: `.agents/agents/` from the working directory up to the nearest repository root (`.git` directory or worktree file). Outside a repository, only the working directory is scanned.
 
-Nearest project definitions override ancestor projects, which override user definitions. At each directory, `.agents` takes precedence over `.claude`. Symlinked files/directories are followed, canonical paths deduplicate aliases, and directory cycles are skipped. Filenames need not match the declared name. Duplicate names within one discovery root keep the first file in sorted traversal order and produce a diagnostic.
+Nearest project definitions override ancestor projects, which override user definitions. Only `.agents/agents/` is scanned; `.claude/` directories are ignored. Symlinked files/directories are followed, canonical paths deduplicate aliases, and directory cycles are skipped. Filenames need not match the declared name. Duplicate names within one discovery root keep the first file in sorted traversal order and produce a diagnostic.
 
 Project definitions are skipped unless Pi reports the project trusted. The extension does not execute scripts or hooks while discovering files. It rescans at each parent turn, list call, and named launch, so additions, edits, and removals take effect without restarting. A launch snapshots its selected bodies; already-running children keep their original instructions.
 
@@ -56,7 +56,7 @@ Review only; do not modify files. Report verified findings with path:line eviden
 
 Supported frontmatter is `name`, `description`, and optional `model: inherit`. The body must be nonempty. Names are lowercase kebab-case starting with a letter, at most 64 characters. Definitions are limited to 128 KiB. The canonical source path and base directory are injected with the body so relative references resolve from the definition, not the reviewed workspace.
 
-This is Claude-style discovery, **not full Claude configuration compatibility**. Other frontmatter (including `tools`, `disallowedTools`, model aliases, `permissionMode`, hooks, and memory settings) rejects the definition with a diagnostic; it is never silently treated as enforced. Select model, provider, effort, and exact Pi tools through the existing launch fields. Definitions with a recognizable name but invalid settings block lower-priority definitions of that name. If malformed YAML or an unreadable file prevents name identification, the diagnostic explains that a lower-priority definition may still be available.
+Definitions use the limited frontmatter schema above, not another agent's configuration format. Other frontmatter (including `tools`, `disallowedTools`, model aliases, `permissionMode`, hooks, and memory settings) rejects the definition with a diagnostic; it is never silently treated as enforced. Select model, provider, effort, and exact Pi tools through the existing launch fields. Definitions with a recognizable name but invalid settings block lower-priority definitions of that name. If malformed YAML or an unreadable file prevents name identification, the diagnostic explains that a lower-priority definition may still be available.
 
 Use `subagents_list` to inspect the current catalog and errors. Listing returns metadata, not full bodies. A missing/invalid requested type fails the whole launch batch before any child starts or job IDs are reserved. Generic tasks that omit `agent` behave as before.
 
@@ -261,7 +261,7 @@ These keys apply only when the parent editor has focus. Dialogs, overlays, and a
 
 Stopping uses the existing cancellation path, with no confirmation dialog. A stopping child remains visible until cancellation settles; repeated Ctrl+X on that child does nothing. Cancellation cannot undo file changes, external requests, or charges already incurred. A tool that ignores its abort signal can delay stopping. There is no model-callable stop tool.
 
-The tools also work in print, JSON, and RPC modes. Only TUI mode renders the menu.
+**The interactive TUI is the only supported user-facing workflow.** Orchestration remains independent of rendering so background child sessions and headless tests can run without terminal UI. Other Pi execution modes are not explicitly blocked, but print, JSON, and RPC workflows have no separate support or compatibility guarantee.
 
 ## Lifecycle, retention, and limits
 
@@ -296,7 +296,7 @@ From `home/.pi`:
 npm run test:subagents
 ```
 
-The default suite uses real in-process Agents and controlled provider streams, without paid API requests. `npm run test:subagents:live` runs the existing real-CLI/RPC test with a scripted local provider (also free).
+The default suite uses real in-process Agents and controlled provider streams, without paid API requests. `npm run test:subagents:live` uses RPC as a headless test driver for real CLI extension loading and orchestration with a scripted local provider (also free), not as a supported user-facing workflow.
 
 For an explicit paid test using your configured credentials:
 
@@ -309,7 +309,7 @@ The paid test uses low effort, allows one tool-free child, caps parent turns, an
 
 Coverage includes:
 
-- Named definition parsing, invalid settings, shadowing, deterministic precedence, trusted-project gating, nested directories, symlink aliases/cycles, bounded reads, and fresh discovery after edits/deletions.
+- Named definition parsing, invalid settings, shadowing, deterministic precedence, `.agents`-only discovery (including ignored `.claude` roots), trusted-project gating, nested directories, symlink aliases/cycles, bounded reads, and fresh discovery after edits/deletions.
 - Catalog advertisement without body leakage, automatic child prompt injection (including fallback prompt construction), source paths, named-job metadata, generic-task isolation, and atomic rejection of missing/invalid definitions.
 
 - Real Pi extension loading, absence of opening commands/shortcuts, conservative delegation descriptions/guidelines, required kebab-case names, atomic duplicate-name validation, name reservation/reset, inheritance, tool selection and permission-hook delegation.

@@ -10,7 +10,7 @@ import { DiscardSchema, InspectSchema, LaunchSchema, SnapshotSchema, SteerSchema
 export function registerTools(pi: ExtensionAPI, runtime: Runtime) {
   pi.registerTool({
     name: 'subagents_list', label: 'List agent definitions',
-    description: 'Discover named agent definitions (not running jobs) from user and trusted-project .agents/agents and .claude/agents directories. Returns names, descriptions, source paths and validation diagnostics. Pass a name as tasks[].agent in subagents_launch to automatically apply its instructions. Rescans files on every call.',
+    description: 'Discover named agent definitions (not running jobs) from user and trusted-project .agents/agents directories. Returns names, descriptions, source paths and validation diagnostics. Pass a name as tasks[].agent in subagents_launch to automatically apply its instructions. Rescans files on every call.',
     parameters: Type.Object({}),
     outputSchema: Type.Object({
       agents: Type.Array(Type.Object({ name: Type.String(), description: Type.String(), filePath: Type.String(), source: Type.Union([Type.Literal('user'), Type.Literal('project')]) })),

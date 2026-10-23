@@ -38,10 +38,10 @@ test('missing roots are silent and discovery is fresh after additions, edits, an
   assert.deepEqual(f.discover().agents.map(agent => agent.name), ['new-agent']);
 });
 
-test('recursively discovers both conventions, ignores non-Markdown, sorts by agent name', (t) => {
+test('recursively discovers .agents roots, ignores non-Markdown, sorts by agent name', (t) => {
   const f = fixture(t);
   f.agent(f.homeDir, '.agents', 'nested/z.md', 'zeta');
-  f.agent(f.homeDir, '.claude', 'deeper/nested/a.MD', 'alpha', 'Body.', 'model: inherit\n');
+  f.agent(f.homeDir, '.agents', 'deeper/nested/a.MD', 'alpha', 'Body.', 'model: inherit\n');
   f.agent(f.cwd, '.agents', 'nested/b.md', 'beta');
   f.agent(f.cwd, '.agents', 'not-markdown.txt', 'ignored');
   const catalog = f.discover();
@@ -51,34 +51,40 @@ test('recursively discovers both conventions, ignores non-Markdown, sorts by age
   assert.deepEqual(catalog.diagnostics, []);
 });
 
-test('nearest project beats ancestors and user; canonical convention wins within each location', (t) => {
+test('nearest project beats ancestors, which beat user definitions', (t) => {
   const f = fixture(t);
   mkdirSync(join(f.cwd, '.git'));
   const child = join(f.cwd, 'packages', 'app');
   mkdirSync(child, { recursive: true });
-  f.agent(f.homeDir, '.agents', 'review.md', 'review', 'user canonical');
-  f.agent(f.homeDir, '.claude', 'review.md', 'review', 'user compatibility');
-  f.agent(f.cwd, '.agents', 'review.md', 'review', 'ancestor canonical');
-  f.agent(child, '.claude', 'review.md', 'review', 'nearest compatibility');
-  assert.equal(f.discover({ cwd: child }).agents[0].body, 'nearest compatibility');
-  f.agent(child, '.agents', 'review.md', 'review', 'nearest canonical');
-  assert.equal(f.discover({ cwd: child }).agents[0].body, 'nearest canonical');
+  f.agent(f.homeDir, '.agents', 'review.md', 'review', 'user definition');
+  assert.equal(f.discover({ cwd: child }).agents[0].body, 'user definition');
+  f.agent(f.cwd, '.agents', 'review.md', 'review', 'ancestor definition');
+  assert.equal(f.discover({ cwd: child }).agents[0].body, 'ancestor definition');
+  f.agent(child, '.agents', 'review.md', 'review', 'nearest definition');
+  assert.equal(f.discover({ cwd: child }).agents[0].body, 'nearest definition');
   f.agent(f.root, '.agents', 'outside.md', 'outside');
   assert.deepEqual(f.discover({ cwd: child }).agents.map(agent => agent.name), ['review']);
   assert.deepEqual(f.discover({ cwd: child }).diagnostics, []);
 });
 
-test('user canonical roots beat compatibility roots and project ancestors beat both', (t) => {
+test('.claude roots are ignored at user, ancestor project, and nearest project locations', (t) => {
   const f = fixture(t);
-  f.agent(f.homeDir, '.claude', 'review.md', 'review', 'compatibility user');
-  f.agent(f.homeDir, '.agents', 'review.md', 'review', 'canonical user');
-  assert.equal(f.discover().agents[0].body, 'canonical user');
   const child = join(f.cwd, 'child');
   mkdirSync(child);
   mkdirSync(join(f.cwd, '.git'));
-  f.agent(f.cwd, '.claude', 'review.md', 'review', 'ancestor project');
-  assert.equal(f.discover({ cwd: child }).agents[0].body, 'ancestor project');
-  assert.deepEqual(f.discover({ cwd: child }).diagnostics, []);
+  for (const base of [f.homeDir, f.cwd, child]) {
+    f.agent(base, '.claude', 'only.md', 'claude-only');
+    f.agent(base, '.claude', 'review.md', 'review', '', 'tools: Read\n');
+    f.write(join(base, '.claude', 'agents', 'invalid.md'), 'invalid');
+    symlinkSync(join(f.root, 'missing'), join(base, '.claude', 'agents', 'broken.md'));
+  }
+  assert.deepEqual(f.discover({ cwd: child }), { agents: [], diagnostics: [] });
+  f.agent(f.homeDir, '.agents', 'review.md', 'review', 'Only .agents instructions.');
+  const result = f.discover({ cwd: child });
+  assert.deepEqual(result.agents.map(agent => [agent.name, agent.body, agent.source]), [
+    ['review', 'Only .agents instructions.', 'user'],
+  ]);
+  assert.deepEqual(result.diagnostics, []);
 });
 
 test('worktree .git files define the boundary and non-git projects scan only cwd', (t) => {
@@ -96,7 +102,7 @@ test('untrusted project directories are not scanned, including their invalid def
   const f = fixture(t);
   f.agent(f.homeDir, '.agents', 'user.md', 'user');
   f.agent(f.cwd, '.agents', 'project.md', 'project');
-  f.write(join(f.cwd, '.claude', 'agents', 'invalid.md'), 'invalid');
+  f.write(join(f.cwd, '.agents', 'agents', 'invalid.md'), 'invalid');
   assert.deepEqual(f.discover({ projectTrusted: false }).agents.map(agent => agent.name), ['user']);
   assert.deepEqual(f.discover({ projectTrusted: false }).diagnostics, []);
 });
@@ -118,11 +124,10 @@ test('symlink directories and files are followed, loops terminate, aliases dedup
   assert.deepEqual(f.discover(), catalog);
 });
 
-test('shared user/project realpaths retain project precedence, even against another user definition', (t) => {
+test('shared user/project realpaths retain project precedence', (t) => {
   const f = fixture(t);
   const user = f.agent(f.homeDir, '.agents', 'shared.md', 'review', 'shared definition');
-  f.agent(f.homeDir, '.claude', 'other.md', 'review', 'other user definition');
-  const project = join(f.cwd, '.claude', 'agents');
+  const project = join(f.cwd, '.agents', 'agents');
   mkdirSync(project, { recursive: true });
   symlinkSync(user, join(project, 'shared.md'));
   const catalog = f.discover();
@@ -135,10 +140,8 @@ test('whole-directory aliases across user and project roots retain project sourc
   const f = fixture(t);
   f.agent(f.homeDir, '.agents', 'nested/shared.md', 'shared');
   mkdirSync(join(f.cwd, '.agents'), { recursive: true });
-  mkdirSync(join(f.cwd, '.claude'), { recursive: true });
   const target = join(f.homeDir, '.agents', 'agents');
   symlinkSync(target, join(f.cwd, '.agents', 'agents'));
-  symlinkSync(target, join(f.cwd, '.claude', 'agents'));
   const result = f.discover();
   assert.equal(result.agents.length, 1);
   assert.equal(result.agents[0].source, 'project');
@@ -195,7 +198,6 @@ for (const [label, content, diagnostic] of [
 test('invalid named higher-priority definitions block silent fallback to lower-priority agents', (t) => {
   const f = fixture(t);
   f.agent(f.homeDir, '.agents', 'review.md', 'review', 'Lower priority valid agent.');
-  f.agent(f.cwd, '.claude', 'review.md', 'review', 'Compatibility valid agent.');
   const invalidPath = join(f.cwd, '.agents', 'agents', 'review.md');
   for (const content of [
     '---\nname: review\ndescription: Review\ntools: Read\n---\nBody',
@@ -210,7 +212,7 @@ test('invalid named higher-priority definitions block silent fallback to lower-p
     assert.match(result.diagnostics[0], /agent "review" will not fall back/);
   }
   rmSync(invalidPath);
-  assert.equal(f.discover().agents[0].body, 'Compatibility valid agent.');
+  assert.equal(f.discover().agents[0].body, 'Lower priority valid agent.');
 });
 
 test('invalid lower-priority definitions do not remove a valid higher-priority selection', (t) => {

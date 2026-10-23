@@ -827,19 +827,17 @@ test('TUI menu animates, advances timers and disappears after completion', async
   assert.equal(status.elapsedMs, 61_000); // Finished duration is frozen.
 });
 
-for (const mode of ['print', 'json', 'rpc']) {
-  test(`${mode} keeps background tools functional without terminal UI`, async (t) => {
-    const h = harness(t, mode);
-    await h.launch([{ prompt: 'headless' }]);
-    await until(() => h.requests.length === 1);
-    assert.equal(h.commands.size, 0);
-    assert.equal(h.shortcuts.size, 0);
-    assert.equal(h.widgets.size, 0);
-    assert.equal(h.dialogs.length, 0);
-    h.requests[0].finish('headless result');
-    await until(() => h.notifications.length === 1);
-  });
-}
+test('headless orchestration stays independent of terminal UI', async (t) => {
+  const h = harness(t);
+  await h.launch([{ prompt: 'headless' }]);
+  await until(() => h.requests.length === 1);
+  assert.equal(h.commands.size, 0);
+  assert.equal(h.shortcuts.size, 0);
+  assert.equal(h.widgets.size, 0);
+  assert.equal(h.dialogs.length, 0);
+  h.requests[0].finish('headless result');
+  await until(() => h.notifications.length === 1);
+});
 
 test('Ctrl+X immediately stops only the selected child and notifies once', async (t) => {
   const h = harness(t, 'tui');

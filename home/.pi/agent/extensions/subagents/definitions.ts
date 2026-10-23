@@ -107,59 +107,57 @@ export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true
   const blockedNames = new Set<string>();
   const seenFiles = new Set<string>();
   // Highest priority first is important: the same real file may occur at both
-  // project and user paths, or in both conventions, through symlinks.
+  // project and user paths through symlinks.
   const locations: { directory: string; source: AgentDefinition['source'] }[] = [
     ...(projectTrusted ? projectDirectories(resolve(cwd), diagnostics).map(directory => ({ directory, source: 'project' as const })) : []),
     { directory: resolve(homeDir), source: 'user' },
   ];
   for (const { directory, source } of locations) {
-    for (const convention of ['.agents', '.claude']) {
-      const root = join(directory, convention, 'agents');
-      const seenDirectories = new Set<string>();
-      const namesAtPriority = new Map<string, string>();
-      const visit = (path: string, isRoot = false) => {
-        try {
-          // Only absent roots are silent; dangling symlinks and disappearing
-          // entries inside an existing root are actionable I/O diagnostics.
-          if (isRoot) {
-            try { lstatSync(path); } catch (error) { if (missing(error)) return; throw error; }
-          }
-          const canonical = realpathSync(path);
-          const stat = statSync(canonical);
-          if (stat.isDirectory()) {
-            if (seenDirectories.has(canonical)) return;
-            seenDirectories.add(canonical);
-            for (const entry of readdirSync(path).sort(compare)) visit(join(path, entry));
-          } else if (extname(path).toLowerCase() === '.md') {
-            if (!stat.isFile()) throw new Error('Definition is not a regular file');
-            if (seenFiles.has(canonical)) return;
-            seenFiles.add(canonical);
-            const definition = parseDefinition(canonical, source);
-            const duplicate = namesAtPriority.get(definition.name);
-            if (duplicate) {
-              diagnostics.push(`${path}: duplicate agent name "${definition.name}" at the same priority; first definition: ${duplicate}`);
-              return;
-            }
-            namesAtPriority.set(definition.name, canonical);
-            if (!selected.has(definition.name) && !blockedNames.has(definition.name)) selected.set(definition.name, definition);
-          } else if (isRoot) {
-            throw new Error('Agent discovery root is not a directory');
-          }
-        } catch (error) {
-          if (error instanceof InvalidNamedDefinition) {
-            blockedNames.add(error.agentName);
-            if (!namesAtPriority.has(error.agentName)) namesAtPriority.set(error.agentName, path);
-            diagnostics.push(`${path}: ${errorText(error)}; agent "${error.agentName}" will not fall back to a lower-priority definition`);
-          } else {
-            const limitation = extname(path).toLowerCase() === '.md'
-              ? '; could not determine a valid agent name, so a lower-priority definition may still be available'
-              : '';
-            diagnostics.push(`${path}: ${errorText(error)}${limitation}`);
-          }
+    const root = join(directory, '.agents', 'agents');
+    const seenDirectories = new Set<string>();
+    const namesAtPriority = new Map<string, string>();
+    const visit = (path: string, isRoot = false) => {
+      try {
+        // Only absent roots are silent; dangling symlinks and disappearing
+        // entries inside an existing root are actionable I/O diagnostics.
+        if (isRoot) {
+          try { lstatSync(path); } catch (error) { if (missing(error)) return; throw error; }
         }
-      };
-      visit(root, true);
-    }
+        const canonical = realpathSync(path);
+        const stat = statSync(canonical);
+        if (stat.isDirectory()) {
+          if (seenDirectories.has(canonical)) return;
+          seenDirectories.add(canonical);
+          for (const entry of readdirSync(path).sort(compare)) visit(join(path, entry));
+        } else if (extname(path).toLowerCase() === '.md') {
+          if (!stat.isFile()) throw new Error('Definition is not a regular file');
+          if (seenFiles.has(canonical)) return;
+          seenFiles.add(canonical);
+          const definition = parseDefinition(canonical, source);
+          const duplicate = namesAtPriority.get(definition.name);
+          if (duplicate) {
+            diagnostics.push(`${path}: duplicate agent name "${definition.name}" at the same priority; first definition: ${duplicate}`);
+            return;
+          }
+          namesAtPriority.set(definition.name, canonical);
+          if (!selected.has(definition.name) && !blockedNames.has(definition.name)) selected.set(definition.name, definition);
+        } else if (isRoot) {
+          throw new Error('Agent discovery root is not a directory');
+        }
+      } catch (error) {
+        if (error instanceof InvalidNamedDefinition) {
+          blockedNames.add(error.agentName);
+          if (!namesAtPriority.has(error.agentName)) namesAtPriority.set(error.agentName, path);
+          diagnostics.push(`${path}: ${errorText(error)}; agent "${error.agentName}" will not fall back to a lower-priority definition`);
+        } else {
+          const limitation = extname(path).toLowerCase() === '.md'
+            ? '; could not determine a valid agent name, so a lower-priority definition may still be available'
+            : '';
+          diagnostics.push(`${path}: ${errorText(error)}${limitation}`);
+        }
+      }
+    };
+    visit(root, true);
   }
   return { agents: [...selected.values()].sort((a, b) => compare(a.name, b.name)), diagnostics };
 }
