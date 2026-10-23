@@ -44,7 +44,6 @@ export interface Job {
 
 export interface MenuActions {
   jobs: () => Job[];
-  stop: (job: Job) => void;
   subscribe: (listener: () => void) => () => void;
 }
 

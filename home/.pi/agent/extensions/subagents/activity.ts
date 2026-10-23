@@ -6,7 +6,7 @@ import { oneLine } from './formatting.ts';
 /** Summarize known tools without inspecting output or private reasoning. */
 export function toolActivity(name: string, args: unknown) {
   const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
-  const field = (key: string) => typeof input[key] === 'string' ? oneLine(truncateToWidth(oneLine(input[key]), 160)) : '';
+  const field = (key: string) => typeof input[key] === 'string' ? oneLine(input[key]) : '';
   const path = field('path') || field('file_path');
   const command = name === 'bash' ? field('command') : '';
   switch (name) {

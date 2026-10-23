@@ -1,5 +1,5 @@
 import type { Theme, ThemeColor } from '@earendil-works/pi-coding-agent';
-import { truncateToWidth, visibleWidth } from '@earendil-works/pi-tui';
+import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from '@earendil-works/pi-tui';
 import type { Job } from './contracts.ts';
 import { elapsed, oneLine } from './formatting.ts';
 
@@ -25,20 +25,20 @@ function activityColor(activity: string): ThemeColor {
   return 'muted';
 }
 
-/** Active jobs only. A roomy table collapses to compact rows on narrow/short terminals. */
-export function renderWidget(jobs: Job[], theme: Theme, width: number, selected = 0, capacity = 4, height = Infinity) {
+/** Read-only rows. Spare space automatically reveals activity that the column clips. */
+export function renderWidget(jobs: Job[], theme: Theme, width: number, height = 8) {
   if (!jobs.length || width <= 0 || height <= 0) return [];
-  const table = width >= 64 && height >= 4;
   const heading = height >= 2;
-  const footer = height >= 3;
-  capacity = Math.max(1, Math.min(capacity, height - Number(heading) - Number(footer) - Number(table)));
-  selected = Math.max(0, Math.min(selected, jobs.length - 1));
-  const start = Math.max(0, selected - capacity + 1);
-  const nameWidth = Math.min(34, Math.max(14, ...jobs.map(job => visibleWidth(oneLine(job.id)) + 2)), Math.floor(width * 0.35));
+  const overflow = jobs.length > height - Number(heading) && height >= 3;
+  const visible = jobs.slice(0, Math.max(1, height - Number(heading) - Number(overflow)));
+  let detailBudget = height - Number(heading) - visible.length - Number(overflow);
+  const wide = width >= 64;
+  const nameWidth = wide
+    ? Math.min(34, Math.max(14, ...jobs.map(job => visibleWidth(oneLine(job.id)) + 2)), Math.floor(width * 0.35))
+    : Math.max(8, Math.min(26, Math.floor(width * 0.32)));
   const timeWidth = Math.max(4, ...jobs.map(job => visibleWidth(elapsed(job))));
-  const statusWidth = 10;
-  const activityWidth = width - nameWidth - statusWidth - timeWidth - 9;
-  const separator = theme.fg('dim', ' │ ');
+  const activityWidth = wide ? width - nameWidth - 10 - timeWidth - 6
+    : Math.max(0, width - nameWidth - 4 - (width >= 36 ? timeWidth + 2 : 0));
   const lines: string[] = [];
   if (heading) {
     const frame = FRAMES[Math.floor(Date.now() / 100) % FRAMES.length];
@@ -48,27 +48,29 @@ export function renderWidget(jobs: Job[], theme: Theme, width: number, selected 
       + theme.fg('dim', ' · ') + theme.fg('success', `${running} running`)
       + (stopping ? theme.fg('dim', ' · ') + theme.fg('warning', `${stopping} stopping`) : ''));
   }
-  if (table) {
-    lines.push(theme.fg('dim', [cell('  AGENT', nameWidth), cell('STATUS', statusWidth),
-      cell('DOING NOW', activityWidth), cell('TIME', timeWidth, true)].join(' │ ')));
-  }
-  for (const [offset, job] of jobs.slice(start, start + capacity).entries()) {
-    const chosen = start + offset === selected;
+  for (const job of visible) {
     const status = STATUS[job.status];
     const activity = job.status === 'stopping' ? 'Stopping — waiting for cancellation' : oneLine(job.activity);
-    const title = `${chosen ? '›' : ' '} ${oneLine(job.id)}`;
-    const name = (size: number) => theme.fg(chosen ? 'accent' : 'text', chosen ? theme.bold(cell(title, size)) : cell(title, size));
-    if (table) {
-      lines.push([name(nameWidth), theme.fg(status.color, cell(`${status.icon} ${job.status}`, statusWidth)),
-        theme.fg(activityColor(activity), cell(activity, activityWidth)), theme.fg('dim', cell(elapsed(job), timeWidth, true))].join(separator));
+    const color = activityColor(activity);
+    const name = theme.fg('text', cell(`  ${oneLine(job.id)}`, nameWidth));
+    if (wide) {
+      lines.push([name, theme.fg(status.color, cell(`${status.icon} ${job.status}`, 10)),
+        theme.fg(color, cell(activity, activityWidth)), theme.fg('dim', cell(elapsed(job), timeWidth, true))].join('  '));
     } else {
-      const compactNameWidth = Math.max(8, Math.min(26, Math.floor(width * 0.32)));
-      const time = width >= 36 ? `  ${elapsed(job)}` : '';
-      const room = Math.max(0, width - compactNameWidth - 4 - visibleWidth(time));
-      lines.push(name(compactNameWidth) + '  ' + theme.fg(status.color, status.icon) + ' '
-        + theme.fg(activityColor(activity), cell(activity, room)) + theme.fg('dim', time));
+      lines.push(name + '  ' + theme.fg(status.color, status.icon) + ' ' + theme.fg(color, cell(activity, activityWidth))
+        + (width >= 36 ? theme.fg('dim', `  ${cell(elapsed(job), timeWidth, true)}`) : ''));
+    }
+    if (detailBudget > 0 && width > 8 && visibleWidth(activity) > activityWidth) {
+      const details = wrapTextWithAnsi(activity, width - 4);
+      const count = Math.min(detailBudget, details.length);
+      for (let i = 0; i < count; i++) {
+        const detail = i === count - 1 && count < details.length
+          ? truncateToWidth(details.slice(i).join(' '), width - 4) : details[i];
+        lines.push(theme.fg('dim', i ? '    ' : '  ↳ ') + theme.fg(color, detail));
+      }
+      detailBudget -= count;
     }
   }
-  if (footer) lines.push(theme.fg('dim', `  ↑↓ select · Ctrl+X stop${jobs.length > capacity ? ` · ${selected + 1}/${jobs.length}` : ''}`));
+  if (overflow) lines.push(theme.fg('dim', `  +${jobs.length - visible.length} more active · ask parent for details`));
   return lines.map((line) => truncateToWidth(line, width));
 }

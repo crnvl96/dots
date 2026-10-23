@@ -1,6 +1,5 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { visibleWidth } from '@earendil-works/pi-tui';
 import { toolActivity, updateActivity } from '../activity.ts';
 
 function job() {
@@ -30,10 +29,10 @@ test('known tools describe files, commands and searches rather than arbitrary in
   for (const [name, args, expected] of cases) assert.equal(toolActivity(name, args), expected);
 });
 
-test('tool labels sanitize terminal sequences and bound long input before retaining it', () => {
+test('tool labels sanitize terminal sequences and keep full input for automatic detail expansion', () => {
   const label = toolActivity('bash', { command: '\x1b[31mnpm test\x1b[0m\n--watch\t' + '界'.repeat(200) });
   assert.ok(!/[\x00-\x1f\x7f]/.test(label));
-  assert.ok(visibleWidth(label) <= 168);
+  assert.ok(label.endsWith('界'.repeat(200)));
   assert.match(label, /^Running npm test --watch/);
   assert.equal(toolActivity('custom\n\x1b[31mtool', {}), 'Using custom tool');
 });

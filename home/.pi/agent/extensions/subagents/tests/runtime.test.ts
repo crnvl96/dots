@@ -482,7 +482,7 @@ test('names cannot collide across concurrent launches or be reused after discard
   await until(() => h.requests.length === 2);
 });
 
-test('inline menu has no mouse entry point, commands, shortcuts or dialogs', async (t) => {
+test('read-only subagent display has no input handlers, commands, shortcuts or dialogs', async (t) => {
   const h = harness(t, 'tui');
   assert.equal(h.commands.size, 0);
   assert.equal(h.shortcuts.size, 0);
@@ -490,10 +490,9 @@ test('inline menu has no mouse entry point, commands, shortcuts or dialogs', asy
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
   assert.equal(menu.handleMouse, undefined);
-  assert.equal(menu.handleInput('\r'), false);
-  assert.equal(menu.handleInput('guidance'), false);
+  assert.equal(menu.handleInput, undefined);
   assert.equal(h.dialogs.length, 0);
-  assert.equal(h.inputListeners.size, 1);
+  assert.equal(h.inputListeners.size, 0);
   assert.equal(h.notifications.length, 0);
 });
 
@@ -952,90 +951,6 @@ test('headless orchestration stays independent of terminal UI', async (t) => {
   await until(() => h.notifications.length === 1);
 });
 
-test('Ctrl+X immediately stops only the selected child and notifies once', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids } } = await h.launch([{ prompt: 'first child' }, { prompt: 'second child' }]);
-  await until(() => h.requests.length === 2);
-  const menu = h.widgets.get('subagents.pi');
-  assert.equal(menu.handleInput('\x1b[B'), true); // Down selects the second child.
-  assert.equal(menu.handleInput('x'), false);
-  assert.equal(h.requests[1].options.signal.aborted, false);
-  const waiting = h.call('subagents_wait', { ids: [ids[1]] });
-  assert.equal(menu.handleInput('\x18'), true);
-  assert.equal(h.requests[0].options.signal.aborted, false);
-  assert.equal(h.requests[1].options.signal.aborted, true);
-  await until(() => h.notifications.length === 1);
-  assert.equal(h.notifications[0].message.details.id, ids[1]);
-  assert.equal(h.notifications[0].message.details.status, 'stopped');
-  assert.match(h.notifications[0].message.content, /Stopped by user/);
-  const waited = (await waiting).structuredContent;
-  assert.equal(waited.timedOut, false);
-  assert.equal(waited.agents[0].status, 'stopped');
-  assert.match(waited.agents[0].result, /Stopped by user/);
-  const late = await h.steer(ids[1], 'cannot restart');
-  assert.equal(late.structuredContent.accepted, false);
-  assert.equal(late.structuredContent.agent.status, 'stopped');
-  assert.doesNotMatch(screen(menu), new RegExp(ids[1]));
-  h.requests[0].finish('first answer');
-  await until(() => h.notifications.length === 2);
-  assert.equal(screen(menu), '');
-  assert.equal(menu.handleInput('\x18'), false);
-  assert.equal(h.notifications.length, 2);
-});
-
-test('stopping a running tool cancels its signal and discards queued steering without another turn', async (t) => {
-  const h = harness(t, 'tui');
-  let release;
-  let childSignal;
-  const gate = new Promise((resolve) => { release = resolve; });
-  useChildTools(h, {
-    slow_read: async (_id, _args, signal, onUpdate) => {
-      childSignal = signal;
-      onUpdate?.({ content: [{ type: 'text', text: 'partial tool output' }], details: undefined });
-      await new Promise((resolve) => {
-        if (signal?.aborted) return resolve();
-        signal?.addEventListener('abort', () => resolve(), { once: true });
-        release = resolve;
-      });
-      if (signal?.aborted) throw Object.assign(new Error('This operation was aborted'), { name: 'AbortError' });
-      return { content: [{ type: 'text', text: 'tool finished' }], details: {} };
-    },
-  });
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'run a tool' }]);
-  await until(() => h.requests.length === 1);
-  const enabled = system(h.requests[0]).toolsAdded.map((tool) => tool.name);
-  assert.ok(enabled.includes('slow_read'), enabled.join(','));
-  h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'slow-tool', name: 'slow_read', arguments: { path: 'slow.ts' } }],
-  });
-  try {
-    await until(() => childSignal || h.requests.length > 1);
-  } catch (error) {
-    assert.fail(`${error.message} nested=${JSON.stringify(h.nested)} requests=${h.requests.length}`);
-  }
-  if (!childSignal) {
-    const result = h.requests.at(-1).context.messages.find((message) => message.role === 'toolResult');
-    assert.fail(JSON.stringify(result ?? h.requests.at(-1).context.messages.map((message) => message.role)));
-  }
-  const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find(job => job.id === id);
-  assert.equal(job.tools.get('slow-tool'), 'Using slow_read');
-  await h.steer(id, 'queued but must not run');
-  assert.equal(menu.handleInput('\x18'), true);
-  assert.equal(childSignal.aborted, true);
-  assert.match(screen(menu), /stopping/);
-  assert.equal(menu.handleInput('\x18'), true); // A stopping job cannot restart or be stopped twice.
-  const late = await h.steer(id, 'do not revive this child');
-  assert.equal(late.structuredContent.accepted, false);
-  assert.equal(late.structuredContent.agent.status, 'stopping');
-  release();
-  await until(() => h.notifications.length === 1);
-  assert.equal(h.notifications[0].message.details.status, 'stopped');
-  assert.ok(h.requests.slice(1).every((request) => request.options.signal.aborted));
-  assert.equal(job.pendingSteers, 0);
-  assert.equal(screen(menu), '');
-});
-
 test('inline menu fits narrow widths, Unicode tasks and short terminals', async (t) => {
   const h = harness(t, 'tui');
   await h.launch(Array.from({ length: 7 }, (_, i) => ({ prompt: `Task ${i} 日本語 👨‍👩‍👧‍👦 \x1b[31mcolors\x1b[0m\nmore` })));
@@ -1111,17 +1026,17 @@ test('a broken UI observer cannot fail the child agent or produce repeated obser
   assert.equal(logged.mock.callCount(), 1);
 });
 
-test('session cleanup removes the menu and input listener and suppresses stale child notifications', async (t) => {
+test('session cleanup removes the read-only display and suppresses stale child notifications', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
   const h = harness(t, 'tui');
   await h.launch([{ prompt: 'cancel on session switch' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  assert.equal(h.inputListeners.size, 1);
+  assert.equal(h.inputListeners.size, 0);
   await h.events.get('session_tree')();
   assert.equal(h.widgets.size, 0);
   assert.equal(h.inputListeners.size, 0);
-  assert.equal(menu.handleInput('\x18'), false);
+  assert.equal(menu.handleInput, undefined);
   assert.equal(screen(menu), '');
   assert.equal(h.requests[0].options.signal.aborted, true);
   assert.equal(h.notifications.length, 0);
@@ -1414,18 +1329,19 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     assert.doesNotMatch(rendered(), /Private .* assignment/);
     assert.equal(renderer.getFocusedComponent(), editor);
 
-    terminal.input('\x1b[B'); // Empty editor lets the inline menu select the second child.
+    terminal.input('\x1b[A'); // Arrow keys belong entirely to the parent editor.
+    terminal.input('\x1b[B');
     terminal.input('Parent draft');
     assert.equal(editor.getText(), 'Parent draft');
-    terminal.input('\x18'); // Stop remains available while a parent draft exists.
+    terminal.input('\x18'); // The widget cannot intercept Ctrl+X or cancel a child.
     assert.equal(h.requests[0].options.signal.aborted, false);
-    assert.equal(h.requests[1].options.signal.aborted, true);
+    assert.equal(h.requests[1].options.signal.aborted, false);
     assert.equal(editor.getText(), 'Parent draft');
     assert.equal(renderer.getFocusedComponent(), editor);
     assert.equal(renderer.hasOverlay(), false);
-    const stopped = (await h.call('subagents_wait', { ids: [ids[1]] })).structuredContent.agents[0];
-    assert.equal(stopped.status, 'stopped');
-    assert.equal(h.notifications.length, 1);
+    assert.equal(h.inputListeners.size, 0);
+    assert.equal(menu.handleInput, undefined);
+    assert.equal(h.notifications.length, 0);
 
     terminal.columns = 48;
     terminal.rows = 18;
@@ -1433,12 +1349,13 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     renderer.renderNow(true);
     assert.ok(rendered().split('\n').every((line) => visibleWidth(line) <= 48));
     assert.match(rendered(), /Parent draft/);
-    assert.doesNotMatch(rendered(), /second-child/);
+    assert.match(rendered(), /second-child/);
     terminal.input('\r');
     assert.deepEqual(submitted, ['Parent draft']);
     assert.equal(h.requests.length, 2); // Enter submits only to the parent, never to a child.
     h.requests[0].finish('first answer');
-    await h.call('subagents_wait', { ids: [ids[0]] });
+    h.requests[1].finish('second answer');
+    await h.call('subagents_wait', { ids });
     renderer.renderNow(true);
     assert.equal(screen(menu), '');
     assert.match(rendered(), /Parent session remains running/);

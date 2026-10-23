@@ -15,7 +15,6 @@ export interface Runtime {
   subscribe: (listener: () => void) => () => void;
   launch: (tasks: TaskInput[], signal: AbortSignal | undefined, ctx: ExtensionToolContext) => Promise<Job[]>;
   steer: (job: Job, prompt: string) => void;
-  stop: (job: Job) => void;
   waitFor: (selected: Job[], signal?: AbortSignal, timeoutMs?: number) => Promise<boolean>;
   discard: (selected: Job[]) => Promise<void>;
   refresh: () => void;
@@ -152,16 +151,6 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     refresh();
   }
 
-  function stop(job: Job) {
-    if (jobs.get(job.id) !== job || job.status !== 'running' || !job.session) return;
-    job.status = 'stopping';
-    job.activity = 'Stopping — waiting for cancellation';
-    job.session.agent.clearAllQueues();
-    job.pendingSteers = 0;
-    void job.session.abort();
-    refresh();
-  }
-
   function ask(job: Job, message: string, kind: FeedbackKind) {
     job.activity = kind === 'decision' ? 'Needs a decision' : 'Found a gap';
     refresh();
@@ -282,7 +271,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   pi.on('session_tree', cleanup);
 
   return {
-    jobs, subscribe, launch, steer, stop, waitFor, discard, refresh,
+    jobs, subscribe, launch, steer, waitFor, discard, refresh,
     attachUI: (ctx) => {
       if (ctx.mode !== 'tui' || uiContext) return;
       uiContext = ctx;
