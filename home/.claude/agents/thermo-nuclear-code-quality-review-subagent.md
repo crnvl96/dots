@@ -1,1 +1,0 @@
-../../.agents/agents/thermo-nuclear-code-quality-review-subagent.md
