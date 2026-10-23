@@ -1,12 +1,6 @@
 {
   "$schema": "https://pi.dev/schemas/settings.schema.json",
   "lastChangelogVersion": "1.4.0",
-  "defaultProvider": "radius",
-  "defaultModel": "recursive/flint",
-  "defaultThinkingLevel": "high",
-  "modelThinkingLevels": {
-    "radius/recursive/flint": "low"
-  },
   "theme": "system",
   "hideThinkingBlock": true,
   "editorPaddingX": 1,
@@ -16,10 +10,25 @@
   "showCacheMissNotices": true,
   "treeFilterMode": "no-tools",
   "defaultProjectTrust": "always",
-  "defaultTools": [
-    "+codemode"
-  ],
+  "defaultTools": ["+codemode"],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
-  "extensions": []
+  "extensions": [],
+  "defaultProvider": "radius",
+  "defaultModel": "recursive/flint",
+  "defaultThinkingLevel": "high",
+  "enabledModels": [
+    "openai/gpt-6-astra",
+    "openai/gpt-6.1-sol",
+    "openai/gpt-5.6-luna",
+    "radius/grok-4.7",
+    "radius/recursive/flint"
+  ],
+  "modelThinkingLevels": {
+    "radius/recursive/flint": "low",
+    "openai/gpt-6-astra": "high",
+    "openai/gpt-6.1-sol": "high",
+    "openai/gpt-5.6-luna": "high",
+    "radius/grok-4.7": "high"
+  }
 }

@@ -8,8 +8,6 @@ disable-model-invocation: true
 
 Use this skill for an unusually strict review focused on implementation quality, maintainability, abstraction quality, and codebase health.
 
-First read [review scope and reporting](../thermos/references/review-workflow.md). Those shared conventions establish the target, read-only boundaries, repository guidance, snapshot exception to diff-only scope, and findings format. Then apply the upstream rubric below. Propose structural remedies; do not implement them without explicit user authorization.
-
 Above all, this skill should push the reviewer to be **ambitious** about code structure. Do not merely identify local cleanup opportunities. Actively search for "code judo" moves: restructurings that preserve behavior while making the implementation dramatically simpler, smaller, more direct, and more elegant.
 
 ## Core Prompt
