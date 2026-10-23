@@ -1,0 +1,1 @@
+../../.agents/agents/thermo-nuclear-review-subagent.md
