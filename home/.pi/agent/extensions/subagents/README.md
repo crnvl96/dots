@@ -2,7 +2,7 @@
 
 An in-process Pi extension for selectively delegating substantial, well-bounded tasks to background agents. Children have isolated conversations and share the parent's working directory and callable tools. The parent can keep working while they run.
 
-Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. `definitions.ts` discovers reusable agent definitions; `catalog.ts` advertises them to the parent. Session/runtime/tool modules handle launches, and the dashboard displays jobs.
+Source: `home/.pi/agent/extensions/subagents/`. Pi loads `index.ts`. `definitions.ts` discovers reusable agent definitions; `catalog.ts` advertises them to the parent. Session/runtime/tool modules handle launches, and a compact inline menu displays active jobs.
 
 ## Delegation policy
 
@@ -223,7 +223,7 @@ Returns one snapshot with its available final report. Inspection never waits for
 Snapshot states:
 
 - `status`: `running`, `stopping`, `completed`, `failed`, or `stopped`.
-- `activity`: live, automatically derived detail such as `Starting`, `Thinking`, `Writing response`, `Running <tool names>`, or `Working`, followed by the final outcome. Displayed in the widget and dashboard; no child status tool is needed.
+- `activity`: live, automatically derived detail such as `Starting`, `Thinking`, `Writing response`, `Running <tool names>`, or `Working`, followed by the final outcome. Displayed in the inline menu; no child status tool is needed.
 - `notification: pending`: the child is still working or the report is being prepared.
 - `notification: queued`: handed to Pi's queue; **not an acknowledgement that the parent has read it**.
 - `notification: failed`: synchronous notification enqueue/preparation failed; `notificationError` contains the error. An already-prepared report remains recoverable through status or late steering.
@@ -242,50 +242,32 @@ After reviewing and integrating a report, the parent should release it when it i
 
 Call **`subagents_discard`** with exact, unique IDs. The whole batch is validated before anything is removed: running/stopping jobs, pending report preparation, unknown IDs, duplicates, and cancelled calls are rejected. Failed or stopped children can be discarded once report preparation settles, including reports recovered after notification failure.
 
-Discarding removes the jobs from the dashboard, widget, and status/steering/wait lookup. An already-running wait retains its selected reports until it returns; future calls with discarded IDs fail. A dashboard displaying an explicitly discarded report returns to the list. Discard does **not** retract queued notifications, erase parent transcript messages, or delete full-response files that delivered messages may still reference.
+Discarding removes the jobs from status/steering/wait lookup. An already-running wait retains its selected reports until it returns; future calls with discarded IDs fail. Discard does **not** retract queued notifications, erase parent transcript messages, or delete full-response files that delivered messages may still reference.
 
 Queueing a report does not prove that the parent has read it. Therefore reports are not automatically discarded on enqueue: the parent decides when they are no longer needed. The launch tool includes guidance to discard reviewed reports. If the parent does not do so, only the latest 20 settled reports remain as a bounded recovery fallback.
 
-## Dashboard
+## Inline menu
 
-**Click the subagent widget** to open the dashboard. This is the only entry point: no command or opening keyboard shortcut is registered. The widget appears when there are running jobs or retained finished reports. Click a row inside the dashboard to open that child.
+The menu appears above the parent editor while children are running or stopping. It shows up to four one-line entries with each child's name, current activity, and elapsed time. A `›` marks the selected child. Arrow navigation scrolls longer lists, keeping the selected child visible. Colors follow the current Pi theme: accent for selection and thinking, success for the running count and tool activity, warning for stopping or requests for attention. Timestamps and separators stay dim.
 
-The dashboard is an overlay; it does not switch parent sessions. Its presentation is heavily inspired by Claude Code's compact background-task UI, while retaining Pi's theme and native transcript components:
-
-- **Name-first rows:** each child's meaningful kebab-case name is its label and ID, with lifecycle state and elapsed time aligned on the right when there is room. Full task prompts do not appear in the list or parent widget; inspect a child to see its assignment.
-- **Clear outer frame, quiet interior:** a theme-accent rounded border surrounds both the dashboard and its stop-confirmation view (warning-colored for confirmation). Flat headers, thin separators, a `›` selection pointer, and emphasized task text keep the interior compact without full-width selection backgrounds. Mouse coordinates account for the frame; compact layouts keep it too.
-- **Indented activity:** `⎿` detail lines show what each child is doing, queued guidance, its model, tool-use count, and reported token usage where space permits.
-- **Compact parent widget:** an animated asterisk-style indicator, running/finished counts, up to four short active-agent names with activity/time, and a `Click to view` hint. No task prompts or opening keybinding hints. Failed results remain explicitly marked when work finishes.
-- **Child detail view:** clicking a row opens that child's live session. The editor is focused, shows a cursor, and accepts typing. Enter sends: a steer while the child is running, or a new turn when it is idle. The session stays available until discard, so you can continue the conversation after the first report.
-
-Tool-use counts include started calls, including failed calls. Token totals sum provider-reported finalized assistant messages; live partial snapshots are not added, and zero/unknown totals are omitted. These are per-child UI metrics, not a new billing ledger or parent usage aggregation. Colors follow the current Pi theme rather than hardcoding Claude's palette. On narrow terminals, names/details are clipped safely and lower-priority metadata may be omitted.
-
-| Action | Default key |
+| Action | Key |
 | --- | --- |
-| Select a child in the list | Up / Down |
-| Open its transcript / steering editor | Enter or `s` |
-| Send a message from the live editor | Enter |
-| Stop selected child from the list | `x`, then `y` to confirm |
-| Stop child while viewing transcript | Ctrl+X, then `y` |
-| Cancel stop confirmation | `n` or Esc |
-| Back to list / close overlay | Esc |
-| Scroll transcript | PgUp / PgDn or mouse wheel |
-| Jump to top / resume following live output | Ctrl+Home / Ctrl+End |
-| Toggle thinking / expand tool output | Ctrl+T / Ctrl+O |
+| Select a child while the parent prompt is empty | Up / Down |
+| Stop the selected child immediately | Ctrl+X |
 
-Pi keybindings apply to navigation and toggle actions. Scrolling pauses live-follow; jumping to the end resumes it. The editor keeps separate drafts for viewed jobs. In **fullscreen mode**, click the widget to open the dashboard and click either line of a child entry to open its transcript/editor. Transcript blocks and the editor also support mouse interaction. Pi routes mouse input in **fullscreen mode**, which this dotfiles configuration uses. Regular-mode Pi leaves mouse input to the terminal, so the dashboard cannot be opened there with this mouse-only entry point. Keyboard navigation, steering, scrolling, and closing still work inside an already-open dashboard.
+Typing and Enter still go to the parent. Ask the parent to steer a child through `subagents_steer`; there is no child composer, transcript view, click action, or dashboard overlay. No opening command or shortcut is registered.
 
-Stopping is available through the interactive dashboard; there is no model-callable stop tool. Cancellation cannot undo file changes, external requests, or charges already incurred. A tool that ignores its abort signal can delay stopping.
+These keys apply only when the parent editor has focus. Dialogs, overlays, and autocomplete keep their own keys. When a prompt contains text, arrows retain their normal editing behavior. Ctrl+X retains Pi's normal copy behavior when there are no active children; while the menu is active it requests cancellation of the selected child. The menu works in both regular and fullscreen TUI modes and disappears when all children finish. Completion reports still arrive in the parent transcript and remain available through the orchestrator's tools.
 
-The tools also work in print, JSON, and RPC modes. The dashboard and animated widget require interactive TUI mode; RPC does not render this custom terminal overlay.
+Stopping uses the existing cancellation path, with no confirmation dialog. A stopping child remains visible until cancellation settles; repeated Ctrl+X on that child does nothing. Cancellation cannot undo file changes, external requests, or charges already incurred. A tool that ignores its abort signal can delay stopping. There is no model-callable stop tool.
+
+The tools also work in print, JSON, and RPC modes. Only TUI mode renders the menu.
 
 ## Lifecycle, retention, and limits
 
-- Live sessions stay in this extension runtime until discard, history eviction, or session cleanup, so the dashboard can keep sending messages. Discard and eviction dispose the child session. Memory is bounded by the latest 20 settled sessions, not by an unbounded history.
-- Only report metadata, counters, and bounded final text remain for finished jobs. The parent can remove those with `subagents_discard`; at most the latest **20 settled reports** are kept otherwise. In-flight report preparation is not prematurely evicted.
-- The previous 20-job cap already prevented unlimited growth in finished-job count, but each retained Agent could hold a large, unbounded conversation and tool outputs. Releasing heavy state addresses that cost without depending on the parent remembering to discard reports. Finished agents make no further model calls; the widget animation timer stops when no jobs remain active.
-- An already-open **report** remains visible if the history limit evicts it (at most one extra pinned report). Explicit discard releases that view too. Neither restores an evicted/discarded job to the status/steering APIs.
-- Session start, session shutdown, tree navigation, and extension reload cancel old children, clear runtime history, close dashboards, and suppress notifications still being prepared for the old session. Notifications already handed to Pi follow Pi's session/queue lifecycle.
+- Live sessions and their reports stay in this extension runtime until discard, history eviction, or session cleanup. The parent can release them with `subagents_discard`; at most the latest **20 settled sessions** are kept otherwise. Discard and eviction dispose the child session and its tool state. In-flight report preparation is not prematurely evicted.
+- Finished agents make no further model calls. The menu disappears and its animation timer stops when no jobs remain active; this does not discard retained sessions or reports.
+- Session start, session shutdown, tree navigation, and extension reload cancel old children, clear runtime history, remove the menu and its input listener, and suppress notifications still being prepared for the old session. Notifications already handed to Pi follow Pi's session/queue lifecycle.
 - Parent tool-call cancellation after launch does not cancel children: background work intentionally outlives that call.
 - These are not detached workers: shutting down a one-shot Pi process cancels unfinished children. Keep the parent session/process alive when their results are required; use `subagents_wait` to explicitly hold the parent until dependencies finish. Otherwise the extension does not block parent completion.
 - Completed custom messages are stored in the parent's session transcript, but child Agent state is not persisted or resumed. After restart, read old completion messages from the session rather than querying old IDs.
@@ -335,5 +317,5 @@ Coverage includes:
 - Structured launch results, nonblocking status, late-steering races, result recovery after enqueue failure, and pending artifact writes.
 - Explicit waits for single/batched dependencies, timeouts, cancellation, failed children, retained results, and session cleanup.
 - A **real busy parent Agent** receiving child findings after its current tool completes and before its next model request—without an extra post-final follow-up.
-- Bounded report history, automatic heavy-state/render-cache release, atomic explicit discard, preserved in-flight waits and artifact links, output truncation, UI timers, scroll/focus behavior, framed mouse interaction, narrow terminals, and both real TUI renderers.
-- Name-first styling without prompt leakage into the widget/list, real fullscreen mouse opening, aligned lifecycle states, compact widget failure indicators, real tool/token counters, and finished-transcript controls.
+- Bounded report history, atomic explicit discard, preserved in-flight waits and artifact links, output truncation, UI timers, narrow terminals, and both real TUI renderers.
+- Inline keyboard selection and stopping, stable selection as jobs finish, bounded menu scrolling, focus-safe input routing, listener cleanup, and absence of child editors or click actions.

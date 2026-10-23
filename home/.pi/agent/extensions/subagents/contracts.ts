@@ -56,9 +56,8 @@ export interface Job {
   notificationError?: string;
 }
 
-export interface DashboardActions {
+export interface MenuActions {
   jobs: () => Job[];
-  send: (job: Job, prompt: string) => void;
   stop: (job: Job) => void;
   subscribe: (listener: () => void) => () => void;
 }

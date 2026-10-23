@@ -12,8 +12,9 @@ import test from 'node:test';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
+import { CustomEditor, DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
 import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
+import { jobStats } from '../formatting.ts';
 import extension from '../index.ts';
 
 const parentModel = {
@@ -41,13 +42,12 @@ function harness(t, mode = 'print', renderer) {
   const shortcuts = new Map();
   const widgets = new Map();
   const dialogs = [];
+  const inputListeners = new Set();
   const notices = [];
   const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
-  const kb = new KeybindingsManager({ ...TUI_KEYBINDINGS,
-    'app.thinking.toggle': { defaultKeys: 'ctrl+t' }, 'app.tools.expand': { defaultKeys: 'ctrl+o' },
-  });
   let renders = 0;
-  const tui = renderer ?? { terminal: { rows: 32, columns: 100 }, requestRender() { renders++; } };
+  const tui = renderer ?? { terminal: { rows: 32, columns: 100 }, requestRender() { renders++; },
+    getFocusedComponent() { return undefined; }, hasOverlay() { return false; } };
   const ui = {
     theme,
     setWidget(name, factory) {
@@ -56,23 +56,15 @@ function harness(t, mode = 'print', renderer) {
       else widgets.delete(name);
     },
     notify(text, level) { notices.push({ text, level }); },
-    custom(factory, options) {
-      return new Promise((resolve) => {
-        const dialog = { closed: false, options };
-        dialog.closedPromise = new Promise(resolve => { dialog.resolveClosed = resolve; });
-        const done = () => {
-          if (dialog.closed) return;
-          dialog.closed = true;
-          dialog.handle?.hide();
-          dialog.component?.dispose();
-          resolve();
-          dialog.resolveClosed();
-        };
-        dialog.component = factory(tui, theme, kb, done);
-        dialog.component.focused = true;
-        if (renderer) dialog.handle = renderer.showOverlay(dialog.component, options.overlayOptions);
-        dialogs.push(dialog);
-      });
+    custom() { assert.fail('The inline menu must never open a dialog'); },
+    getEditorText() { return ''; },
+    onTerminalInput(listener) {
+      inputListeners.add(listener);
+      const unsubscribe = renderer?.addInputListener(listener);
+      return () => {
+        inputListeners.delete(listener);
+        unsubscribe?.();
+      };
     },
   };
   initTheme('dark', false);
@@ -147,22 +139,7 @@ function harness(t, mode = 'print', renderer) {
   })) }, signal);
   const steer = (id, prompt) => call('subagents_steer', { id, prompt });
   t.after(() => events.get('session_shutdown')());
-  const open = (id) => {
-    const widget = widgets.get('subagents.pi');
-    assert.ok(widget, 'The widget is the only dashboard entry point');
-    const before = dialogs.length;
-    assert.equal(mouse(widget, 0)?.handled, true);
-    assert.equal(dialogs.length, before + 1);
-    const dialog = dialogs.at(-1);
-    if (id) {
-      const index = dialog.component.actions.jobs().findIndex(job => job.id === id);
-      assert.ok(index >= 0);
-      for (let i = 0; i < index; i++) dialog.component.handleInput('\x1b[B');
-      dialog.component.handleInput('\r');
-    }
-    return dialog.closedPromise;
-  };
-  return { tools, events, commands, shortcuts, widgets, dialogs, notices, tui, open,
+  return { tools, events, commands, shortcuts, widgets, dialogs, notices, tui, inputListeners,
     get renders() { return renders; }, notifications, requests, nested, active, ctx, pi, call, launch, steer };
 }
 
@@ -251,13 +228,12 @@ test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out
   assert.match(guidance, /never discard unread results/);
 });
 
-test('finished jobs release Agent, tool results, subscriptions and UI caches but preserve bounded reports', async (t) => {
+test('finished jobs retain live sessions until discard and preserve bounded reports', async (t) => {
   const h = harness(t, 'tui');
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'release heavy state' }]);
   await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  const job = panel.viewedJob;
+  const menu = h.widgets.get('subagents.pi');
+  const job = menu.actions.jobs().find(job => job.id === id);
   h.ctx.executeTool = async () => ({
     result: { content: [{ type: 'text', text: 'HEAVY_TOOL_PAYLOAD'.repeat(10000) }], details: undefined },
     isError: false,
@@ -267,32 +243,21 @@ test('finished jobs release Agent, tool results, subscriptions and UI caches but
   });
   await until(() => h.requests.length === 2);
   streamPartial(h.requests[1], 'partial response', 'private reasoning');
-  await until(() => screen(panel).includes('partial response'));
   assert.ok(job.agent);
   assert.ok(job.tools.size);
-  assert.ok(panel.messages.size);
-  assert.ok(panel.toolComponents.size);
-  assert.ok(panel.transcript.mouseLayout.children.length);
-  panel.handleInput('an unused draft');
-  panel.handleInput('\x1b'); // Release caches even while viewing the list rather than transcript.
   h.requests[1].finish('small final report');
   const waited = await h.call('subagents_wait', { ids: [id] });
   assert.match(waited.structuredContent.agents[0].result, /small final report/);
-  assert.ok(job.agent, 'The live session stays available so the user can type a follow-up.');
+  assert.ok(job.agent, 'Finished sessions stay retained until discard or eviction.');
   assert.equal(typeof job.unsubscribe, 'function');
   assert.equal(job.done, undefined);
-  panel.handleInput('\r');
-  assert.match(screen(panel), /small final report/);
-  panel.handleInput('follow up');
-  assert.match(screen(panel), /follow up/);
+  assert.equal(screen(menu), '');
   await h.call('subagents_discard', { ids: [id] });
-  assert.equal(panel.viewedJob, undefined);
-  assert.match(screen(panel), /No subagents yet/);
-  assert.equal(screen(h.widgets.get('subagents.pi')), '');
+  assert.equal(job.agent, undefined);
+  assert.equal(job.unsubscribe, undefined);
+  assert.equal(job.tools.size, 0);
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
   assert.equal(h.notifications.length, 1); // Delivered report is not retracted.
-  panel.handleInput('\x1b');
-  await opened;
 });
 
 test('discard validates the full batch, rejects unfinished jobs and removes only selected finished reports', async (t) => {
@@ -341,9 +306,7 @@ for (const stopReason of ['error', 'aborted']) {
     h.pi.sendMessage = () => { throw new Error('enqueue unavailable'); };
     const { details: { ids: [id] } } = await h.launch([{ prompt: 'failure cleanup' }]);
     await until(() => h.requests.length === 1);
-    const opened = h.open(id);
-    const panel = h.dialogs[0].component;
-    const job = panel.viewedJob;
+    const job = h.widgets.get('subagents.pi').actions.jobs().find(job => job.id === id);
     h.requests[0].finish('recoverable findings', stopReason, { errorMessage: 'provider failed' });
     const result = (await h.call('subagents_wait', { ids: [id] })).structuredContent.agents[0];
     assert.equal(result.notification, 'failed');
@@ -352,8 +315,8 @@ for (const stopReason of ['error', 'aborted']) {
     assert.ok(job.agent);
     assert.equal(typeof job.unsubscribe, 'function');
     await h.call('subagents_discard', { ids: [id] });
-    panel.handleInput('\x1b');
-    await opened;
+    assert.equal(job.agent, undefined);
+    assert.equal(job.unsubscribe, undefined);
   });
 }
 
@@ -374,13 +337,6 @@ test('launch requires short kebab-case names and uses them unchanged as IDs thro
   assert.match(widget, /review-parser/);
   assert.match(widget, /write-tests/);
   assert.doesNotMatch(widget, /Full task context|Another detailed|Ctrl\+Shift\+A|\/subagents/);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  assert.match(screen(panel), /review-parser/);
-  assert.doesNotMatch(screen(panel), /Full task context|Another detailed/);
-  panel.handleInput('\r');
-  assert.match(screen(panel), /Subagents \/ review-parser/);
-  assert.match(screen(panel), /Full task context/); // Full assignment remains in child detail.
   const steered = await h.steer('review-parser', 'Additional direction');
   assert.equal(steered.structuredContent.accepted, true);
   assert.equal((await h.call('subagents_status', { id: 'review-parser' })).structuredContent.agents[0].id, 'review-parser');
@@ -393,8 +349,7 @@ test('launch requires short kebab-case names and uses them unchanged as IDs thro
   assert.match(result.structuredContent.agents[0].result, /Subagent review-parser completed/);
   assert.ok(h.notifications.some(item => item.message.details.id === 'review-parser'));
   await h.call('subagents_discard', { ids: ['review-parser', 'write-tests'] });
-  panel.handleInput('\x1b');
-  await opened;
+  assert.equal(screen(h.widgets.get('subagents.pi')), '');
 });
 
 test('invalid, missing and duplicate names reject the whole batch without starting or reserving children', async (t) => {
@@ -435,24 +390,19 @@ test('names cannot collide across concurrent launches or be reused after discard
   await until(() => h.requests.length === 2);
 });
 
-test('only a left mouse click on the widget opens the dashboard; no commands or shortcuts are registered', async (t) => {
+test('inline menu has no mouse entry point, commands, shortcuts or dialogs', async (t) => {
   const h = harness(t, 'tui');
   assert.equal(h.commands.size, 0);
   assert.equal(h.shortcuts.size, 0);
-  await h.launch([{ name: 'click-target', prompt: 'private task text' }]);
+  await h.launch([{ name: 'menu-target', prompt: 'private task text' }]);
   await until(() => h.requests.length === 1);
-  const widget = h.widgets.get('subagents.pi');
-  widget.handleMouse({ type: 'click', button: 'right' });
-  widget.handleMouse({ type: 'wheel', wheelDelta: 1 });
+  const menu = h.widgets.get('subagents.pi');
+  assert.equal(menu.handleMouse, undefined);
+  assert.equal(menu.handleInput('\r'), false);
+  assert.equal(menu.handleInput('guidance'), false);
   assert.equal(h.dialogs.length, 0);
-  const opened = h.open();
-  mouse(widget, 0); // Repeated clicks must not stack dashboards.
-  assert.equal(h.dialogs.length, 1);
-  h.dialogs[0].component.handleInput('\x1b');
-  await opened;
-  const reopened = h.open();
-  h.dialogs[1].component.handleInput('\x1b');
-  await reopened;
+  assert.equal(h.inputListeners.size, 1);
+  assert.equal(h.notifications.length, 0);
 });
 
 test('launch returns IDs without waiting; children run in parallel and notify out of order exactly once', async (t) => {
@@ -853,36 +803,28 @@ function streamPartial(request, text, thinking = '') {
   return partial;
 }
 
-function mouse(component, y, x = 2, width = 96) {
-  return component.handleMouse({ type: 'click', button: 'left', x, y, screenX: x, screenY: y,
-    width, height: component.render(width).length, shift: false, alt: false, ctrl: false });
-}
-
-test('TUI widget animates, advances timers, and stops ticking after completion', async (t) => {
+test('TUI menu animates, advances timers and disappears after completion', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 1_000 });
   const h = harness(t, 'tui');
   assert.equal(h.widgets.size, 0); // No UI/timers during extension discovery.
-  await h.launch([{ prompt: 'Explore the repository' }]);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Explore the repository' }]);
   await until(() => h.requests.length === 1);
-  const widget = h.widgets.get('subagents.pi');
-  const initial = screen(widget);
-  assert.match(initial, /1 running/);
+  const menu = h.widgets.get('subagents.pi');
+  const initial = screen(menu);
+  assert.match(initial, new RegExp(id));
   assert.match(initial, /0:00/);
   t.mock.timers.tick(100);
-  assert.notEqual(screen(widget), initial);
+  assert.notEqual(screen(menu), initial);
   t.mock.timers.tick(60_900);
-  assert.match(screen(widget), /1:01/);
+  assert.match(screen(menu), /1:01/);
   h.requests[0].finish('report');
   await until(() => h.notifications.length === 1);
-  assert.match(screen(widget), /0 running.*1 finished/);
+  assert.equal(screen(menu), '');
   const renders = h.renders;
   t.mock.timers.tick(5000);
   assert.equal(h.renders, renders);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  assert.match(screen(panel), /1:01/); // Finished duration is frozen.
-  panel.handleInput('\x1b');
-  await opened;
+  const status = (await h.call('subagents_status', { id })).structuredContent.agents[0];
+  assert.equal(status.elapsedMs, 61_000); // Finished duration is frozen.
 });
 
 for (const mode of ['print', 'json', 'rpc']) {
@@ -899,77 +841,16 @@ for (const mode of ['print', 'json', 'rpc']) {
   });
 }
 
-test('dashboard shows live native messages, thinking, tools, errors, and completed transcripts', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect files' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  assert.match(screen(panel), /Inspect files/);
-  streamPartial(h.requests[0], 'Streaming response', 'Private reasoning');
-  await until(() => screen(panel).includes('Streaming response'));
-  assert.doesNotMatch(screen(panel), /Private reasoning/);
-  panel.handleInput('\x14'); // Ctrl+T uses the supplied application keybindings.
-  assert.match(screen(panel), /Private reasoning/);
-  h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'text', text: 'Reading the source' }, { type: 'toolCall', id: 'read-ui', name: 'read', arguments: { path: 'source.ts' } }],
-  });
-  await until(() => h.requests.length === 2);
-  panel.handleInput('\x0f'); // Ctrl+O expands tool results.
-  assert.match(screen(panel), /read/);
-  assert.match(screen(panel), /source.ts/);
-  assert.match(screen(panel), /ENOENT|permission denied/);
-  h.requests[1].finish('Final child answer', 'error', { errorMessage: 'simulated failure' });
-  await until(() => h.notifications.length === 1);
-  assert.match(screen(panel), /Final child answer/);
-  assert.match(screen(panel), /simulated failure/);
-  panel.handleInput('\x1b'); // Child -> list, not cancellation.
-  assert.match(screen(panel), /failed/);
-  panel.handleInput('\r');
-  assert.match(screen(panel), /Final child answer/);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('manual steering uses a multiline child editor and never sends guidance to the parent', async (t) => {
-  const h = harness(t, 'tui');
-  await h.launch([{ prompt: 'Original assignment' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  panel.handleInput('\r');
-  panel.handleInput('\x1b[200~Focus on tests\nand report risks\x1b[201~');
-  panel.handleInput('\r');
-  assert.match(screen(panel), /Steering queued/);
-  assert.match(screen(panel), /1 steering queued/);
-  assert.equal(h.notifications.length, 0);
-  h.requests[0].finish('first response');
-  await until(() => h.requests.length === 2);
-  assert.deepEqual(userTexts(h.requests[1]), ['Original assignment', 'Focus on tests\nand report risks']);
-  assert.doesNotMatch(screen(panel), /1 steering queued/);
-  h.requests[1].finish('steered response');
-  await until(() => h.notifications.length === 1);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('manual stop requires confirmation, aborts only the selected child, and notifies once', async (t) => {
+test('Ctrl+X immediately stops only the selected child and notifies once', async (t) => {
   const h = harness(t, 'tui');
   const { details: { ids } } = await h.launch([{ prompt: 'first child' }, { prompt: 'second child' }]);
   await until(() => h.requests.length === 2);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  panel.handleInput('\x1b[B'); // Down selects the second child.
-  panel.handleInput('x');
-  assert.match(screen(panel), /Stop /);
-  assert.match(screen(panel), /y stop/);
-  panel.handleInput('n');
+  const menu = h.widgets.get('subagents.pi');
+  assert.equal(menu.handleInput('\x1b[B'), true); // Down selects the second child.
+  assert.equal(menu.handleInput('x'), false);
   assert.equal(h.requests[1].options.signal.aborted, false);
   const waiting = h.call('subagents_wait', { ids: [ids[1]] });
-  panel.handleInput('x');
-  panel.handleInput('y');
+  assert.equal(menu.handleInput('\x18'), true);
   assert.equal(h.requests[0].options.signal.aborted, false);
   assert.equal(h.requests[1].options.signal.aborted, true);
   await until(() => h.notifications.length === 1);
@@ -983,15 +864,12 @@ test('manual stop requires confirmation, aborts only the selected child, and not
   const late = await h.steer(ids[1], 'cannot restart');
   assert.equal(late.structuredContent.accepted, false);
   assert.equal(late.structuredContent.agent.status, 'stopped');
-  panel.handleInput('\r');
-  assert.match(screen(panel), /stopped/);
-  panel.handleInput('\x18'); // Cannot stop a finished child twice.
-  assert.doesNotMatch(screen(panel), /y stop/);
+  assert.doesNotMatch(screen(menu), new RegExp(ids[1]));
   h.requests[0].finish('first answer');
   await until(() => h.notifications.length === 2);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
+  assert.equal(screen(menu), '');
+  assert.equal(menu.handleInput('\x18'), false);
+  assert.equal(h.notifications.length, 2);
 });
 
 test('stopping a running tool cancels its signal and discards queued steering without another turn', async (t) => {
@@ -1028,15 +906,15 @@ test('stopping a running tool cancels its signal and discards queued steering wi
     const result = h.requests.at(-1).context.messages.find((message) => message.role === 'toolResult');
     assert.fail(JSON.stringify(result ?? h.requests.at(-1).context.messages.map((message) => message.role)));
   }
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  assert.match(screen(panel), /Running slow_read/);
-  assert.match(screen(panel), /partial tool output/);
+  const menu = h.widgets.get('subagents.pi');
+  const job = menu.actions.jobs().find(job => job.id === id);
+  assert.equal(job.tools.get('slow-tool').running, true);
+  assert.match(JSON.stringify(job.tools.get('slow-tool').result), /partial tool output/);
   await h.steer(id, 'queued but must not run');
-  panel.handleInput('\x18');
-  panel.handleInput('y');
+  assert.equal(menu.handleInput('\x18'), true);
   assert.equal(childSignal.aborted, true);
-  assert.match(screen(panel), /stopping/);
+  assert.match(screen(menu), /stopping/);
+  assert.equal(menu.handleInput('\x18'), true); // A stopping job cannot restart or be stopped twice.
   const late = await h.steer(id, 'do not revive this child');
   assert.equal(late.structuredContent.accepted, false);
   assert.equal(late.structuredContent.agent.status, 'stopping');
@@ -1044,126 +922,58 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   await until(() => h.notifications.length === 1);
   assert.equal(h.notifications[0].message.details.status, 'stopped');
   assert.ok(h.requests.slice(1).every((request) => request.options.signal.aborted));
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
+  assert.equal(job.pendingSteers, 0);
+  assert.equal(screen(menu), '');
 });
 
-test('scrolling pauses live-follow and Ctrl+End resumes it', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'long transcript' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  streamPartial(h.requests[0], Array.from({ length: 80 }, (_, i) => `line-${i}`).join('\n\n'));
-  await until(() => screen(panel).includes('line-79'));
-  panel.handleInput('\x1b[5~'); // PageUp.
-  assert.match(screen(panel), /Scroll paused/);
-  assert.doesNotMatch(screen(panel), /line-79/);
-  panel.handleInput('\x1b[1;5F'); // Ctrl+End.
-  assert.match(screen(panel), /line-79/);
-  assert.match(screen(panel), /Following live output/);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('UI fits narrow widths, Unicode tasks, short terminals, and theme invalidation', async (t) => {
+test('inline menu fits narrow widths, Unicode tasks and short terminals', async (t) => {
   const h = harness(t, 'tui');
   await h.launch(Array.from({ length: 7 }, (_, i) => ({ prompt: `Task ${i} 日本語 👨‍👩‍👧‍👦 \x1b[31mcolors\x1b[0m\nmore` })));
   await until(() => h.requests.length === 7);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  const widget = h.widgets.get('subagents.pi');
-  assert.match(screen(widget), /\+3 more/);
+  const menu = h.widgets.get('subagents.pi');
   for (const width of [0, 1, 2, 3, 8, 24, 80]) {
     for (const rows of [8, 20, 40]) {
       h.tui.terminal.rows = rows;
-      for (const component of [widget, panel]) {
-        component.invalidate();
-        const lines = component.render(width);
-        assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}`);
-        if (component === panel) assert.ok(lines.length <= rows - (rows < 10 ? 2 : 4));
-      }
+      menu.invalidate();
+      const lines = menu.render(width);
+      assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}`);
+      assert.ok(lines.length <= rows);
     }
   }
-  h.ctx.ui.theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => `THEME:${text}` };
-  panel.invalidate();
-  assert.match(screen(panel), /THEME:Subagents/);
-  panel.handleInput('\x1b');
-  await opened;
 });
 
-test('bordered list prioritizes tasks, aligns state, and uses quiet indented details', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids } } = await h.launch([{ name: 'review-parser', prompt: 'Review the parser ' + 'with a very long assignment '.repeat(8) }, { name: 'write-tests', prompt: 'Write regression tests' }]);
-  await until(() => h.requests.length === 2);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  const backgrounds = [];
-  h.ctx.ui.theme.bg = (color, text) => { backgrounds.push(color); return text; };
-  const lines = panel.render(96).map(stripTerminalSequences);
-  assert.match(lines[0], /^╭─+╮$/);
-  assert.match(lines.at(-1), /^╰─+╯$/);
-  assert.ok(lines.slice(1, -1).every(line => line.startsWith('│') && line.endsWith('│')));
-  assert.match(lines[1], /Subagents.*2 running/);
-  assert.match(lines[2], /Background tasks/);
-  const selected = lines.findIndex(line => line.includes('›'));
-  assert.match(lines[selected], /› .*review-parser.*running · 0:00│$/);
-  assert.match(lines[selected + 1], /⎿.*parent-model.*0 tool uses/);
-  assert.equal(visibleWidth(lines[selected]), 96);
-  assert.doesNotMatch(lines.join('\n'), /\[.*running\]/);
-  for (const id of ids) assert.ok(lines.join('\n').includes(id));
-  assert.doesNotMatch(lines.join('\n'), /Review the parser|Write regression tests/);
-  assert.deepEqual(backgrounds, []); // No full-width cards or selection bands.
-  const widget = screen(h.widgets.get('subagents.pi'));
-  assert.match(widget, /⎿.*review-parser/);
-  assert.match(widget, /Click to view/);
-  assert.doesNotMatch(widget, /Review the parser|Write regression tests|Ctrl\+Shift\+A|\/subagents/);
-  for (const id of ids) assert.ok(widget.includes(id));
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('child counters use actual tool calls and finalized tokens, and finished UI removes steering hints', async (t) => {
+test('child counters use actual tool calls and finalized tokens', async (t) => {
   const h = harness(t, 'tui');
   const { details: { ids: [id] } } = await h.launch([{ prompt: 'Inspect usage counters' }]);
   await until(() => h.requests.length === 1);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
+  const menu = h.widgets.get('subagents.pi');
+  const job = menu.actions.jobs().find(job => job.id === id);
   const partial = streamPartial(h.requests[0], 'Working');
   partial.usage.totalTokens = 999999;
-  assert.doesNotMatch(screen(panel), /tokens/); // No estimates from in-flight snapshots.
+  assert.doesNotMatch(jobStats(job), /tokens/); // No estimates from in-flight snapshots.
   h.requests[0].finish('', 'toolUse', {
     content: [{ type: 'toolCall', id: 'counter-read', name: 'read', arguments: { path: 'example.ts' } }],
     usage: { input: 1000, output: 200, cacheRead: 0, cacheWrite: 0, totalTokens: 1200,
       cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
   });
   await until(() => h.requests.length === 2);
-  assert.match(screen(panel), /1 tool use · 1\.2K tokens/);
+  assert.match(jobStats(job), /1 tool use · 1\.2K tokens/);
   h.requests[1].finish('Finished');
   await until(() => h.notifications.length === 1);
-  panel.handleInput('\r');
-  const transcript = screen(panel);
-  assert.match(transcript, new RegExp(`Subagents / ${id}`));
-  assert.match(transcript, /End of transcript/);
-  assert.match(transcript, /Enter send/);
-  assert.match(transcript, /1 tool use · 1\.2K tokens/);
-  assert.doesNotMatch(transcript, /Ctrl\+X.*stop|Following live output/);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
+  assert.match(jobStats(job), /1 tool use · 1\.2K tokens/);
+  assert.equal(screen(menu), '');
 });
 
-test('compact widget distinguishes failed work from successful completion', async (t) => {
+test('failed children disappear from the menu but remain available through status', async (t) => {
   const h = harness(t, 'tui');
-  await h.launch([{ prompt: 'Fail safely' }]);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Fail safely' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('', 'error', { errorMessage: 'test failure' });
   await until(() => h.notifications.length === 1);
-  const widget = screen(h.widgets.get('subagents.pi'));
-  assert.match(widget, /✗ Subagents · 0 running · 1 finished · 1 failed/);
-  assert.doesNotMatch(widget, /✓/);
+  assert.equal(screen(h.widgets.get('subagents.pi')), '');
+  const job = (await h.call('subagents_status', { id })).structuredContent.agents[0];
+  assert.equal(job.status, 'failed');
+  assert.match(job.error, /test failure/);
 });
 
 test('a broken UI observer cannot fail the child agent or produce repeated observer errors', async (t) => {
@@ -1181,16 +991,18 @@ test('a broken UI observer cannot fail the child agent or produce repeated obser
   assert.equal(logged.mock.callCount(), 1);
 });
 
-test('session cleanup closes dashboards, removes widgets, and suppresses stale child notifications', async (t) => {
+test('session cleanup removes the menu and input listener and suppresses stale child notifications', async (t) => {
   t.mock.timers.enable({ apis: ['setInterval', 'Date'] });
   const h = harness(t, 'tui');
   await h.launch([{ prompt: 'cancel on session switch' }]);
   await until(() => h.requests.length === 1);
-  const opened = h.open();
+  const menu = h.widgets.get('subagents.pi');
+  assert.equal(h.inputListeners.size, 1);
   await h.events.get('session_tree')();
-  await opened;
-  assert.equal(h.dialogs[0].closed, true);
   assert.equal(h.widgets.size, 0);
+  assert.equal(h.inputListeners.size, 0);
+  assert.equal(menu.handleInput('\x18'), false);
+  assert.equal(screen(menu), '');
   assert.equal(h.requests[0].options.signal.aborted, true);
   assert.equal(h.notifications.length, 0);
   const renders = h.renders;
@@ -1198,7 +1010,7 @@ test('session cleanup closes dashboards, removes widgets, and suppresses stale c
   assert.equal(h.renders, renders);
 });
 
-test('history is bounded without evicting running agents, and a viewed child stays selected', async (t) => {
+test('history is bounded without evicting running agents, and the menu retains the active child', async (t) => {
   const h = harness(t, 'tui');
   await h.launch([{ name: 'older-finished-child', prompt: 'older finished child' }]);
   await until(() => h.requests.length === 1);
@@ -1206,19 +1018,15 @@ test('history is bounded without evicting running agents, and a viewed child sta
   await until(() => h.notifications.length === 1);
   const { details: { ids: [runningId] } } = await h.launch([{ prompt: 'keep this child running' }]);
   await until(() => h.requests.length === 2);
-  const opened = h.open(runningId);
-  const panel = h.dialogs[0].component;
+  const menu = h.widgets.get('subagents.pi');
   for (let i = 0; i < 24; i++) {
     await h.launch([{ prompt: `finished ${i}` }]);
     await until(() => h.requests.length === i + 3);
     h.requests[i + 2].finish(`answer ${i}`);
     await until(() => h.notifications.length === i + 2);
   }
-  assert.match(screen(panel), /keep this child running/);
-  panel.handleInput('\x1b');
-  assert.match(screen(panel), /1 running · 20 finished/);
-  panel.handleInput('\x1b');
-  await opened;
+  assert.match(screen(menu), new RegExp(runningId));
+  assert.doesNotMatch(screen(menu), /older-finished-child|finished-\d+/);
   assert.equal(h.requests[1].options.signal.aborted, false);
   const retained = (await h.call('subagents_status', {})).structuredContent.agents;
   assert.equal(retained.length, 21);
@@ -1227,153 +1035,29 @@ test('history is bounded without evicting running agents, and a viewed child sta
   await assert.rejects(h.launch([{ name: 'older-finished-child', prompt: 'must not reuse evicted name' }]), /name already used/);
 });
 
-test('an open finished transcript stays visible after eviction from bounded history', async (t) => {
-  t.mock.timers.enable({ apis: ['Date'], now: 1000 }); // Tie timestamps: retention follows completion order.
+test('bounded history evicts in completion order even when timestamps tie', async (t) => {
+  t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'pinned child' }]);
+  const { details: { ids: [id] } } = await h.launch([{ prompt: 'oldest finished child' }]);
   await until(() => h.requests.length === 1);
-  h.requests[0].finish('Keep this finished answer visible');
+  const menu = h.widgets.get('subagents.pi');
+  const job = menu.actions.jobs().find(job => job.id === id);
+  h.requests[0].finish('Oldest answer');
   await until(() => h.notifications.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
+  const completed = [];
   for (let i = 0; i < 21; i++) {
-    await h.launch([{ prompt: `new child ${i}` }]);
+    const { details: { ids: [nextId] } } = await h.launch([{ prompt: `new child ${i}` }]);
+    completed.push(nextId);
     await until(() => h.requests.length === i + 2);
     h.requests[i + 1].finish('new answer');
     await until(() => h.notifications.length === i + 2);
   }
-  assert.match(screen(panel), /Keep this finished answer visible/);
-  panel.handleInput('\x1b');
-  assert.match(screen(panel), /0 running · 20 finished/);
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('stop confirmation never retargets a child that completes while the dialog is open', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'child to stop' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  panel.handleInput('\x18');
-  h.requests[0].finish('finished while confirmation was open');
-  await until(() => h.notifications.length === 1);
-  await h.launch([{ prompt: 'do not stop this new child' }]);
-  await until(() => h.requests.length === 2);
-  panel.handleInput('y');
-  assert.equal(h.requests[1].options.signal.aborted, false);
-  assert.equal(h.notifications.length, 1);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('stop confirmation and steering input remain visible on an eight-row terminal', async (t) => {
-  const h = harness(t, 'tui');
-  h.tui.terminal.rows = 8;
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'short screen child' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open();
-  const panel = h.dialogs[0].component;
-  panel.handleInput('x');
-  const confirmation = screen(panel, 48);
-  assert.match(confirmation, new RegExp(`Stop ${id}`));
-  assert.match(confirmation, /y stop.*n \/ Esc cancel/);
-  assert.match(confirmation, /Cannot undo/);
-  const frame = panel.render(48).map(stripTerminalSequences);
-  assert.match(frame[0], /^╭─+╮$/);
-  assert.match(frame.at(-1), /^╰─+╯$/);
-  assert.ok(frame.slice(1, -1).every(line => line.startsWith('│') && line.endsWith('│')));
-  assert.equal(h.requests[0].options.signal.aborted, false);
-  panel.handleInput('n');
-  panel.handleInput('\r');
-  panel.handleInput('visible draft');
-  assert.match(screen(panel, 48), /visible draft/);
-  panel.handleInput('\x18');
-  assert.match(screen(panel, 48), /y stop/);
-  panel.handleInput('y');
-  await until(() => h.notifications.length === 1);
-  assert.equal(h.notifications[0].message.details.status, 'stopped');
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('mouse clicks reach scrolled thinking/tool blocks and their toggles survive stream updates', async (t) => {
-  const h = harness(t, 'tui');
-  h.tui.terminal.rows = 50;
-  useChildTools(h, {
-    wide_read: async () => ({ content: [{ type: 'text', text: Array.from({ length: 21 }, (_, i) => `tool-row-${i}`).join('\n') }], details: {} }),
-  });
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'earlier context\n'.repeat(50) }]);
-  await until(() => h.requests.length === 1);
-  h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'thinking', thinking: 'Click-revealed reasoning' }, { type: 'toolCall', id: 'click-tool', name: 'wide_read', arguments: { path: 'source.ts' } }],
-  });
-  await until(() => h.requests.length === 2);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  let lines = panel.render(96).map(stripTerminalSequences);
-  const thinking = lines.findIndex((line) => line.includes('Thinking...'));
-  assert.ok(thinking >= 0);
-  assert.equal(mouse(panel, thinking)?.handled, true);
-  assert.match(screen(panel), /Click-revealed reasoning/);
-  assert.doesNotMatch(screen(panel), /tool-row-20/);
-  lines = panel.render(96).map(stripTerminalSequences);
-  const output = lines.findIndex((line) => line.includes('tool-row-0'));
-  assert.ok(output >= 0);
-  assert.equal(mouse(panel, output)?.handled, true);
-  assert.match(screen(panel), /tool-row-20/);
-  streamPartial(h.requests[1], 'New streamed text');
-  await until(() => screen(panel).includes('New streamed text'));
-  assert.match(screen(panel), /tool-row-20/);
-  assert.match(screen(panel), /Click-revealed reasoning/);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('clicked thinking state survives replacement of a live partial snapshot', async (t) => {
-  const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'stream thoughts' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  const partial = streamPartial(h.requests[0], 'First text', 'Live reasoning');
-  await until(() => screen(panel).includes('First text'));
-  const thinking = panel.render(96).map(stripTerminalSequences).findIndex((line) => line.includes('Thinking...'));
-  mouse(panel, thinking);
-  assert.match(screen(panel), /Live reasoning/);
-  h.requests[0].stream.push({ type: 'text_delta', contentIndex: 1, delta: ' updated',
-    partial: { ...partial, content: [{ type: 'thinking', thinking: 'Live reasoning' }, { type: 'text', text: 'First text updated' }] } });
-  await until(() => screen(panel).includes('First text updated'));
-  assert.match(screen(panel), /Live reasoning/);
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
-});
-
-test('clicking a clipped multiline editor repositions the cursor in the correct draft row', async (t) => {
-  const h = harness(t, 'tui');
-  h.tui.terminal.rows = 12;
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'steer with mouse' }]);
-  await until(() => h.requests.length === 1);
-  const opened = h.open(id);
-  const panel = h.dialogs[0].component;
-  const draft = Array.from({ length: 10 }, (_, i) => `draft-row-${i}`).join('\n');
-  panel.handleInput(`\x1b[200~${draft}\x1b[201~`);
-  const row = panel.render(96).map(stripTerminalSequences).findIndex((line) => line.includes('draft-row-9'));
-  assert.ok(row >= 0);
-  const result = mouse(panel, row, 1);
-  assert.equal(result?.focus, true);
-  panel.handleInput('INSERTED ');
-  panel.handleInput('\r');
-  h.requests[0].finish('initial answer');
-  await until(() => h.requests.length === 2);
-  assert.equal(userTexts(h.requests[1])[1], draft.replace('draft-row-9', 'INSERTED draft-row-9'));
-  panel.handleInput('\x1b');
-  panel.handleInput('\x1b');
-  await opened;
+  const retained = (await h.call('subagents_status', {})).structuredContent.agents;
+  assert.deepEqual(retained.map(job => job.id), completed.slice(1));
+  await assert.rejects(h.call('subagents_status', { id }), /Unknown or no longer retained/);
+  assert.equal(job.agent, undefined);
+  assert.equal(job.unsubscribe, undefined);
+  assert.equal(screen(menu), '');
 });
 
 test('pending artifact delivery cannot be pruned or leak a notification into a new session', async (t) => {
@@ -1573,7 +1257,7 @@ test('completion reaches a real busy parent Agent on its next turn, after all si
 });
 
 for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
-  test(`dashboard integrates with real ${Renderer.name} rendering, input, resize, and focus restoration`, async (t) => {
+  test(`inline menu integrates with real ${Renderer.name} rendering, input, resize and parent focus`, async (t) => {
     const terminal = {
       columns: 100, rows: 32, kittyProtocolActive: false,
       start(input, resize) { this.input = input; this.resize = resize; },
@@ -1583,68 +1267,66 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     const renderer = new Renderer(terminal);
     const h = harness(t, 'tui', renderer);
     t.after(() => renderer.stop());
-    const parent = new Text('Parent session remains running underneath', 0, 0);
-    renderer.addChild(parent);
-    renderer.setFocus(parent);
+    const plain = (text) => text;
+    const editor = new CustomEditor(renderer, {
+      borderColor: plain,
+      selectList: { selectedPrefix: plain, selectedText: plain, description: plain, scrollInfo: plain, noMatch: plain },
+    }, new KeybindingsManager(TUI_KEYBINDINGS));
+    const submitted = [];
+    editor.onSubmit = (text) => submitted.push(text);
+    h.ctx.ui.getEditorText = () => editor.getText();
+    renderer.addChild(new Text('Parent session remains running', 0, 0));
+    renderer.addChild(editor);
+    renderer.setFocus(editor);
     renderer.start();
     const rendered = () => (renderer instanceof TuiAltScreen ? renderer.getScreenLines()
       : renderer.captureRenderState().previousLines).map(stripTerminalSequences).join('\n');
-    await h.launch([{ prompt: 'Live child transcript' }]);
-    await until(() => h.requests.length === 1);
-    let opened;
-    if (renderer instanceof TuiAltScreen) {
-      renderer.addChild(h.widgets.get('subagents.pi'));
-      renderer.renderNow(true);
-      const row = renderer.getScreenLines().map(stripTerminalSequences).findIndex(line => line.includes('Subagents'));
-      assert.ok(row >= 0);
-      terminal.input(`\x1b[<0;2;${row + 1}M`);
-      terminal.input(`\x1b[<0;2;${row + 1}m`);
-      assert.equal(h.dialogs.length, 1);
-      opened = h.dialogs[0].closedPromise;
-    } else {
-      // Regular-mode Pi does not route mouse input. Exercise the component's
-      // click handler directly to test overlay rendering, not its accessibility.
-      opened = h.open();
-    }
-    renderer.renderNow(true);
-    assert.match(rendered(), /Subagents/);
-    terminal.input('\r');
-    streamPartial(h.requests[0], 'Child output in the real renderer');
-    await until(() => { renderer.renderNow(); return rendered().includes('Child output in the real renderer'); });
-    terminal.input('Manual guidance');
-    let guidance = 'Manual guidance';
-    if (renderer instanceof TuiAltScreen) {
-      renderer.renderNow();
-      const dialog = h.dialogs[0];
-      const bounds = dialog.handle.getBounds();
-      const row = dialog.component.render(bounds.width).map(stripTerminalSequences).findIndex((line) => line.includes('Manual guidance'));
-      assert.ok(row >= 0);
-      const x = bounds.col + 2; // Terminal columns are 1-based, plus the left frame.
-      const y = bounds.row + row + 1;
-      terminal.input(`\x1b[<0;${x};${y}M`);
-      terminal.input(`\x1b[<0;${x};${y}m`);
-      terminal.input('Clicked ');
-      guidance = 'Clicked Manual guidance';
-    }
-    terminal.input('\r');
-    assert.equal(h.notifications.length, 0);
-    h.requests[0].finish('first answer');
+    const { details: { ids } } = await h.launch([
+      { name: 'first-child', prompt: 'Private first assignment' },
+      { name: 'second-child', prompt: 'Private second assignment' },
+    ]);
     await until(() => h.requests.length === 2);
-    assert.deepEqual(userTexts(h.requests[1]), ['Live child transcript', guidance]);
+    const menu = h.widgets.get('subagents.pi');
+    renderer.addChild(menu);
+    renderer.renderNow(true);
+    assert.match(rendered(), /first-child/);
+    assert.match(rendered(), /second-child/);
+    assert.doesNotMatch(rendered(), /Private .* assignment/);
+    assert.equal(renderer.getFocusedComponent(), editor);
+
+    terminal.input('\x1b[B'); // Empty editor lets the inline menu select the second child.
+    terminal.input('Parent draft');
+    assert.equal(editor.getText(), 'Parent draft');
+    terminal.input('\x18'); // Stop remains available while a parent draft exists.
+    assert.equal(h.requests[0].options.signal.aborted, false);
+    assert.equal(h.requests[1].options.signal.aborted, true);
+    assert.equal(editor.getText(), 'Parent draft');
+    assert.equal(renderer.getFocusedComponent(), editor);
+    assert.equal(renderer.hasOverlay(), false);
+    const stopped = (await h.call('subagents_wait', { ids: [ids[1]] })).structuredContent.agents[0];
+    assert.equal(stopped.status, 'stopped');
+    assert.equal(h.notifications.length, 1);
+
     terminal.columns = 48;
     terminal.rows = 18;
     terminal.resize();
     renderer.renderNow(true);
     assert.ok(rendered().split('\n').every((line) => visibleWidth(line) <= 48));
-    terminal.input('\x1b');
-    terminal.input('\x1b');
-    await opened;
-    assert.equal(renderer.hasOverlay(), false);
+    assert.match(rendered(), /Parent draft/);
+    assert.doesNotMatch(rendered(), /second-child/);
+    terminal.input('\r');
+    assert.deepEqual(submitted, ['Parent draft']);
+    assert.equal(h.requests.length, 2); // Enter submits only to the parent, never to a child.
+    h.requests[0].finish('first answer');
+    await h.call('subagents_wait', { ids: [ids[0]] });
     renderer.renderNow(true);
+    assert.equal(screen(menu), '');
     assert.match(rendered(), /Parent session remains running/);
-    assert.equal(h.requests[1].options.signal.aborted, false);
-    h.requests[1].finish('done');
-    await until(() => h.notifications.length === 1);
+    assert.doesNotMatch(rendered(), /first-child|second-child/);
+    assert.equal(renderer.getFocusedComponent(), editor);
+    assert.equal(h.notifications.length, 2);
+    await h.events.get('session_tree')();
+    assert.equal(h.inputListeners.size, 0);
   });
 }
 
@@ -1916,33 +1598,3 @@ test('wait remains pending through report artifact preparation and returns the f
     if (path) await rm(dirname(path), { recursive: true, force: true });
   }
 });
-
-for (const scrolled of [false, true]) {
-  test(`clicking a dashboard entry's second detail row opens the correct child${scrolled ? ' after list scrolling' : ''}`, async (t) => {
-    const h = harness(t, 'tui');
-    h.tui.terminal.rows = 20;
-    await h.launch(Array.from({ length: 12 }, (_, i) => ({ name: `mouse-target-${i}`, prompt: `mouse-target-${i}` })));
-    await until(() => h.requests.length === 12);
-    const opened = h.open();
-    const panel = h.dialogs[0].component;
-    if (scrolled) {
-      for (let i = 0; i < 11; i++) panel.handleInput('\x1b[B');
-    }
-    const lines = panel.render(96).map(stripTerminalSequences);
-    if (scrolled) assert.ok(!lines.some((line) => line.includes('mouse-target-0')));
-    // Choose a non-selected visible entry; its detail row has no task text.
-    const row = lines.findIndex((line) => line.includes('mouse-target-') && !line.includes('›'));
-    assert.ok(row >= 0);
-    const target = lines[row].match(/mouse-target-\d+/)[0];
-    assert.ok(!lines[row + 1].includes('mouse-target-'));
-    assert.equal(mouse(panel, row + 1)?.handled, true);
-    const detail = screen(panel);
-    assert.ok(detail.includes(target));
-    assert.match(detail, /Enter send/); // Live session, not merely a selected list row.
-    const displayedTasks = new Set(detail.match(/mouse-target-\d+/g));
-    assert.deepEqual([...displayedTasks], [target]);
-    panel.handleInput('\x1b');
-    panel.handleInput('\x1b');
-    await opened;
-  });
-}
