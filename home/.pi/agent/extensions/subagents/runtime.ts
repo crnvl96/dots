@@ -2,6 +2,7 @@ import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import { truncateHead, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from '@earendil-works/pi-coding-agent';
 import { truncateToWidth } from '@earendil-works/pi-tui';
 import { config } from './config.ts';
+import { updateActivity } from './activity.ts';
 import { catalogForContext } from './catalog.ts';
 import { active, lastAssistantText, type FeedbackKind, type Job } from './contracts.ts';
 import { deliverFeedback } from './feedback.ts';
@@ -71,17 +72,11 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   }
 
   function progress(job: Job, event: AgentSessionEvent) {
-    if (event.type === 'tool_execution_start') job.tools.set(event.toolCallId, event.toolName);
-    if (event.type === 'tool_execution_end') job.tools.delete(event.toolCallId);
     if (event.type === 'message_start' && event.message.role === 'user') {
       if (job.hasPrompt && job.pendingSteers) job.pendingSteers--;
       job.hasPrompt = true;
     }
-    if (job.status === 'running') {
-      job.activity = job.tools.size ? `Running ${[...job.tools.values()].join(', ')}`
-        : event.type === 'message_update' && event.assistantMessageEvent.type.startsWith('thinking') ? 'Thinking'
-          : event.type === 'message_update' ? 'Writing response' : 'Working';
-    }
+    updateActivity(job, event);
     refresh();
   }
 

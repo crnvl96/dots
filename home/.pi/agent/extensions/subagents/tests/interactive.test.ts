@@ -111,7 +111,7 @@ test('long lists stay bounded and every child is keyboard reachable', (t) => {
   const h = harness(t, 9);
   for (let index = 0; index < h.jobs.length; index++) {
     assert.match(h.screen(), new RegExp(`› task-${index + 1}`));
-    assert.ok(h.menu.render(100).length <= 6);
+    assert.ok(h.menu.render(100).length <= 7);
     h.input(down);
   }
   assert.match(h.screen(), /› task-9/);

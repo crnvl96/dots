@@ -66,7 +66,7 @@ export class SubagentMenu implements Component {
   render(width: number): string[] {
     if (this.closed) return [];
     const capacity = Math.max(1, Math.min(4, Math.floor(this.tui.terminal.rows / 3)));
-    return renderWidget(this.activeJobs(), this.ctx.ui.theme, width, this.selected, capacity);
+    return renderWidget(this.activeJobs(), this.ctx.ui.theme, width, this.selected, capacity, this.tui.terminal.rows);
   }
 
   invalidate() {}

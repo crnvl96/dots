@@ -1019,7 +1019,7 @@ test('stopping a running tool cancels its signal and discards queued steering wi
   }
   const menu = h.widgets.get('subagents.pi');
   const job = menu.actions.jobs().find(job => job.id === id);
-  assert.equal(job.tools.get('slow-tool'), 'slow_read');
+  assert.equal(job.tools.get('slow-tool'), 'Using slow_read');
   await h.steer(id, 'queued but must not run');
   assert.equal(menu.handleInput('\x18'), true);
   assert.equal(childSignal.aborted, true);
@@ -1072,8 +1072,8 @@ test('progress tracks only running tool IDs and names, not outputs or history', 
     content: [{ type: 'toolCall', id: 'active-read', name: 'slow_read', arguments: {} }],
   });
   await until(() => job.tools.size === 1);
-  assert.deepEqual([...job.tools], [['active-read', 'slow_read']]);
-  assert.match(job.activity, /Running slow_read/);
+  assert.deepEqual([...job.tools], [['active-read', 'Using slow_read']]);
+  assert.match(job.activity, /Using slow_read/);
   release();
   await until(() => h.requests.length === 2);
   assert.equal(job.tools.size, 0);
