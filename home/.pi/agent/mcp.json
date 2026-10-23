@@ -5,6 +5,15 @@
       "auth": {
         "provider": "radius"
       }
+    },
+    "perplexity": {
+      "url": "https://api.perplexity.ai/mcp",
+      "headers": {
+        "Authorization": "Bearer ${PERPLEXITY_API_KEY}"
+      },
+      "timeout": 180,
+      "exposure": "direct",
+      "description": "Perplexity web search, answers, research, and reasoning"
     }
   }
 }
