@@ -11,7 +11,7 @@ Search uses Perplexity's direct `/search` API. Fetch uses the Agent API (`/v1/ag
 
 ## Configuration: one file
 
-**Edit [`config.ts`](config.ts), then `/reload`.** All user-adjustable defaults live in its single `config` object, with inline comments.
+**Edit [`config.ts`](config.ts), then `/reload`.** All user-adjustable defaults live in its single `config` object, with inline comments. Settings are validated once when the extension loads; an invalid value, including a malformed API-root override, fails the load with a `configuration` error instead of failing each tool call.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ Both tools return source-first Markdown to the main model, and untruncated struc
 
 Search adds `operation: "search"`, `query`, and `results` (same as `sources`, in Perplexity rank order). Fetch adds `operation: "fetch"`, `url`, `source_url`, `title`, and `content`.
 
-- `snippet` is a provider-returned excerpt or null. Missing dates and costs stay null, not invented values.
+- `snippet` is a provider-returned excerpt (possibly empty). Missing dates and costs stay null, not invented values.
 - Fetch `content` is the excerpt whose normalized URL **exactly matches the requested URL**. Redirects and unrelated sources do not count; a fetch with no matching source is an error. All returned sources remain visible separately.
 - Fetch requires `fetch_url` tool-result evidence; agent notes alone never establish retrieval. Explicit failed/non-final statuses are errors. An empty extracted page is `not_found` and is not replaced by notes.
 - Search always returns `report: null`.
@@ -75,15 +75,15 @@ Perplexity usage is forwarded to Pi when available. Unknown per-category cost al
 
 ```text
 index.ts             Pi entry point
-config.ts            All user-adjustable settings, with inline documentation
-contracts.ts         Canonical result types
-schemas.ts           Tool input/output schemas
-perplexity.ts        Perplexity Search/Agent API adapter
+config.ts            All user-adjustable settings, inline docs, load-time validation
+schemas.ts           Tool input/output schemas: the source of truth for result types
+contracts.ts         Types derived from schemas, retriever interface, errors
+perplexity.ts        Perplexity Search/Agent API adapter and response parsing
 prompts.ts           Main-agent guidance and safety rules
-tools.ts             Validation, execution, errors, Pi usage/result adaptation
+tools.ts             Input normalization, execution, error results, Pi adaptation
 formatting.ts        Markdown, truncation, private output files
 rendering.ts         UI
-transport.ts         JSON requests, cancellation, timeout, redacted errors
+transport.ts         URL policy, JSON requests, cancellation, timeout, redacted errors
 tests/               Offline adapter, tool, and transport tests
 ```
 
@@ -100,6 +100,7 @@ From `home/.pi`:
 ```sh
 npm run test:web-tools
 npm exec --yes --package=typescript -- tsc --noEmit
+npm exec --yes --package=typescript -- npm run typecheck:web-tools  # source + tests
 
 # Explicit paid opt-in; not part of the offline suite:
 WEB_TOOLS_LIVE_TEST=1 npm run test:web-tools:live

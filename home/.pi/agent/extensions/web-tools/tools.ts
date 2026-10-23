@@ -2,37 +2,32 @@ import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 import type { WebToolsConfig } from './config.ts';
 import {
   emptyMetadata, WebToolsError, type FetchInput, type Operation,
-  type ProviderResponse, type Recency, type RetrievalResult, type Retriever, type SearchInput,
+  type ProviderResponse, type RetrievalResult, type Retriever, type SearchInput,
 } from './contracts.ts';
 import { formatAndTruncate } from './formatting.ts';
 import { fetchGuidelines, searchGuidelines } from './prompts.ts';
-import { renderCall, renderResult, type Details } from './rendering.ts';
+import { progressText, renderCall, renderResult, type Details } from './rendering.ts';
 import { FetchOutputSchema, FetchParams, SearchOutputSchema, SearchParams, type FetchArgs, type SearchArgs } from './schemas.ts';
-import { normalizeUrl, positiveInteger } from './transport.ts';
+import { normalizeUrl } from './transport.ts';
 
-export function validateCommonConfig(settings: WebToolsConfig): void {
-  positiveInteger(settings.output.maxLines, 'output.maxLines');
-  positiveInteger(settings.output.maxBytes, 'output.maxBytes');
-  positiveInteger(settings.search.maxResults, 'search.maxResults');
-  if (settings.search.maxResults > 20) throw new WebToolsError('configuration', 'search.maxResults must be at most 20.');
-  if (!['low', 'medium', 'high'].includes(settings.search.contextSize)) throw new WebToolsError('configuration', 'Invalid search.contextSize.');
-  if (!settings.fetch.defaultObjective.trim()) throw new WebToolsError('configuration', 'fetch.defaultObjective must not be empty.');
+// Pi validates arguments against the parameter schemas before execute, so only
+// checks the schemas cannot express remain: blank-after-trim and URL policy.
+export function normalizeSearch(args: SearchArgs, defaults: WebToolsConfig['search']): SearchInput {
+  const query = args.query.trim();
+  if (!query) throw new WebToolsError('invalid_input', 'query must not be empty.');
+  return {
+    query, max_results: args.max_results ?? defaults.maxResults,
+    search_context_size: args.search_context_size ?? defaults.contextSize, recency: args.recency,
+  };
 }
-export function normalizeSearch(args: SearchArgs, settings: WebToolsConfig): SearchInput {
-  if (typeof args.query !== 'string' || !args.query.trim()) throw new WebToolsError('invalid_input', 'query must not be empty.');
-  const maxResults = args.max_results ?? settings.search.maxResults;
-  const contextSize = args.search_context_size ?? settings.search.contextSize;
-  if (!Number.isInteger(maxResults) || maxResults < 1 || maxResults > 20) throw new WebToolsError('invalid_input', 'max_results must be an integer from 1 to 20.');
-  if (!['low', 'medium', 'high'].includes(contextSize)) throw new WebToolsError('invalid_input', 'Invalid search_context_size.');
-  if (args.recency !== undefined && !['hour', 'day', 'week', 'month', 'year'].includes(args.recency)) throw new WebToolsError('invalid_input', 'Invalid recency.');
-  return { query: args.query.trim(), max_results: maxResults, search_context_size: contextSize, ...(args.recency ? { recency: args.recency as Recency } : {}) };
-}
-export function normalizeFetch(args: FetchArgs, settings: WebToolsConfig): FetchInput {
-  if (args.objective !== undefined && (typeof args.objective !== 'string' || !args.objective.trim())) throw new WebToolsError('invalid_input', 'objective must not be empty.');
-  return { url: normalizeUrl(args.url), objective: args.objective?.trim() || settings.fetch.defaultObjective };
+export function normalizeFetch(args: FetchArgs, defaults: WebToolsConfig['fetch']): FetchInput {
+  const objective = args.objective?.trim() ?? defaults.defaultObjective;
+  if (!objective) throw new WebToolsError('invalid_input', 'objective must not be empty.');
+  return { url: normalizeUrl(args.url), objective };
 }
 function errorResult(operation: Operation, input: string, error: unknown, signal?: AbortSignal): RetrievalResult {
-  const failure = signal?.aborted ? { code: 'cancelled' as const, message: 'Web request cancelled.' }
+  const failure = signal?.aborted && !(error instanceof WebToolsError && error.code === 'cancelled')
+    ? { code: 'cancelled' as const, message: 'Web request cancelled.' }
     : error instanceof WebToolsError ? { code: error.code, message: error.message }
     : { code: 'retrieval_failed' as const, message: 'Web retrieval failed unexpectedly.' };
   const base = { status: 'error' as const, sources: [], report: null, metadata: emptyMetadata(), warnings: [], error: failure };
@@ -40,30 +35,28 @@ function errorResult(operation: Operation, input: string, error: unknown, signal
     : { ...base, operation, url: input, source_url: null, title: null, content: null };
 }
 
-export function registerTools(pi: ExtensionAPI, settings: WebToolsConfig, retriever: Retriever) {
-  validateCommonConfig(settings);
-  const limitDescription = `Text is capped at ${settings.output.maxLines} lines/${settings.output.maxBytes} bytes, with a private full-output file when truncated. Structured data is untruncated.`;
-  const annotations = { readOnlyHint: true, destructiveHint: false, openWorldHint: true };
-  const namespace = { name: 'web', description: 'Perplexity web search and page extraction.', instructions: [...searchGuidelines, ...fetchGuidelines].join('\n') };
+type Update = (update: { content: { type: 'text'; text: string }[]; details: Details }) => void;
+// A started retrieval: the normalized input (for error results) and its response.
+type Retrieval = { input: string; response: Promise<ProviderResponse<RetrievalResult>> };
 
-  async function run(
-    operation: Operation, args: SearchArgs | FetchArgs, signal: AbortSignal | undefined,
-    onUpdate: ((update: { content: { type: 'text'; text: string }[]; details: Details }) => void) | undefined,
-  ) {
-    let input = 'query' in args ? args.query : args.url;
+export function registerTools(pi: Pick<ExtensionAPI, 'registerTool'>, settings: WebToolsConfig, retriever: Retriever) {
+  const limitDescription = `Text is capped at ${settings.output.maxLines} lines/${settings.output.maxBytes} bytes, with a private full-output file when truncated. Structured data is untruncated.`;
+  const shared = {
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
+    namespace: { name: 'web', description: 'Perplexity web search and page extraction.', instructions: [...searchGuidelines, ...fetchGuidelines].join('\n') },
+    renderResult,
+  };
+
+  async function run(operation: Operation, rawInput: string, signal: AbortSignal | undefined, onUpdate: Update | undefined, start: () => Retrieval) {
+    let input = rawInput;
     let response: ProviderResponse<RetrievalResult>;
     try {
-      signal?.throwIfAborted();
-      onUpdate?.({ content: [{ type: 'text', text: `${operation === 'search' ? 'Searching' : 'Fetching'} with Perplexity…` }], details: { operation } });
-      if (operation === 'search') {
-        const normalized = normalizeSearch(args as SearchArgs, settings);
-        input = normalized.query;
-        response = await retriever.search(normalized, signal);
-      } else {
-        const normalized = normalizeFetch(args as FetchArgs, settings);
-        input = normalized.url;
-        response = await retriever.fetch(normalized, signal);
-      }
+      // Abort reasons can carry private data, including a caller's WebToolsError.
+      if (signal?.aborted) throw new WebToolsError('cancelled', 'Web request cancelled.');
+      onUpdate?.({ content: [{ type: 'text', text: progressText(operation) }], details: { operation } });
+      const retrieval = start();
+      input = retrieval.input;
+      response = await retrieval.response;
     } catch (error) {
       response = { result: errorResult(operation, input, error, signal) };
     }
@@ -76,19 +69,25 @@ export function registerTools(pi: ExtensionAPI, settings: WebToolsConfig, retrie
     };
   }
   pi.registerTool<typeof SearchParams, Details>({
-    name: 'web_search', label: 'Web Search',
+    ...shared, name: 'web_search', label: 'Web Search',
     description: `Search the live web with Perplexity. Returns ranked results with provider excerpts; completeness varies. ${limitDescription}`,
     promptSnippet: 'Search the live web and return sources with excerpts', promptGuidelines: searchGuidelines,
-    parameters: SearchParams, outputSchema: SearchOutputSchema, annotations, namespace,
-    execute: (_id, args, signal, onUpdate) => run('search', args, signal, onUpdate),
-    renderCall: (args, theme) => renderCall('search', JSON.stringify(args.query), theme), renderResult,
+    parameters: SearchParams, outputSchema: SearchOutputSchema,
+    execute: (_id, args, signal, onUpdate) => run('search', args.query, signal, onUpdate, () => {
+      const input = normalizeSearch(args, settings.search);
+      return { input: input.query, response: retriever.search(input, signal) };
+    }),
+    renderCall: (args, theme) => renderCall('search', JSON.stringify(args.query), theme),
   });
   pi.registerTool<typeof FetchParams, Details>({
-    name: 'web_fetch', label: 'Web Fetch',
+    ...shared, name: 'web_fetch', label: 'Web Fetch',
     description: `Fetch/extract a known HTTP(S) URL with Perplexity. Best effort, not raw HTML; cannot bypass login walls or paywalls. Provider excerpts remain separate from model notes, and may be absent. ${limitDescription}`,
     promptSnippet: 'Fetch and extract content from a known web URL', promptGuidelines: fetchGuidelines,
-    parameters: FetchParams, outputSchema: FetchOutputSchema, annotations, namespace,
-    execute: (_id, args, signal, onUpdate) => run('fetch', args, signal, onUpdate),
-    renderCall: (args, theme) => renderCall('fetch', args.url, theme), renderResult,
+    parameters: FetchParams, outputSchema: FetchOutputSchema,
+    execute: (_id, args, signal, onUpdate) => run('fetch', args.url, signal, onUpdate, () => {
+      const input = normalizeFetch(args, settings.fetch);
+      return { input: input.url, response: retriever.fetch(input, signal) };
+    }),
+    renderCall: (args, theme) => renderCall('fetch', args.url, theme),
   });
 }

@@ -2,16 +2,19 @@
 // Each run makes two Perplexity searches + one fetch and incurs charges.
 import assert from 'node:assert/strict';
 import { writeFile } from 'node:fs/promises';
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
-import { config } from '../config.ts';
+import type { ExtensionToolContext, ToolDefinition } from '@earendil-works/pi-coding-agent';
+import { Check } from 'typebox/value';
+import { FetchOutputSchema, SearchOutputSchema } from '../schemas.ts';
+import { config, validateConfig } from '../config.ts';
 import { createPerplexity } from '../perplexity.ts';
 import { registerTools } from '../tools.ts';
 
 assert.equal(process.env.WEB_TOOLS_LIVE_TEST, '1', 'Set WEB_TOOLS_LIVE_TEST=1 to permit paid live calls.');
+validateConfig(config);
 const tools: ToolDefinition[] = [];
-registerTools({ registerTool(tool: ToolDefinition) { tools.push(tool); } } as ExtensionAPI, config, createPerplexity(config.perplexity));
+registerTools({ registerTool(tool) { tools.push(tool as unknown as ToolDefinition); } }, config, createPerplexity(config.perplexity));
 assert.deepEqual(tools.map(t => t.name), ['web_search', 'web_fetch']);
-const ctx = {} as ExtensionContext;
+const ctx = {} as ExtensionToolContext; // The extension does not consume the context.
 const cases = [
   { tool: 'web_search', args: { query: 'Perplexity Search API documentation' } },
   { tool: 'web_search', args: { query: 'Perplexity API changelog', max_results: 3, search_context_size: 'high', recency: 'year' } },
@@ -22,11 +25,12 @@ for (const item of cases) {
   const tool = tools.find(t => t.name === item.tool)!;
   const start = Date.now();
   const output = await tool.execute('web-live-test', item.args, undefined, undefined, ctx);
-  const result = output.structuredContent as any;
+  const result = output.structuredContent;
+  assert.ok(Check(item.tool === 'web_search' ? SearchOutputSchema : FetchOutputSchema, result));
   assert.equal(result.status, 'ok', JSON.stringify(result.error));
   assert.ok(!output.isError);
   assert.notEqual(result.metadata.retrieval_evidence, 'none');
-  if (item.tool === 'web_search') {
+  if (result.operation === 'search') {
     assert.ok(result.results.length > 0);
     assert.deepEqual(result.results, result.sources);
   } else {

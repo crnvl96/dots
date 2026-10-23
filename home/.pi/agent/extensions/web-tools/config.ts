@@ -1,4 +1,7 @@
-import type { ContextSize } from './contracts.ts';
+import { Type } from 'typebox';
+import { Check } from 'typebox/value';
+import { WebToolsError, type ContextSize } from './contracts.ts';
+import { SearchParams } from './schemas.ts';
 
 /**
  * ALL USER-ADJUSTABLE SETTINGS LIVE HERE. Edit this object, then /reload Pi.
@@ -65,3 +68,29 @@ export const config: WebToolsConfig = {
     // provider's general retention policy. Search uses the direct Search API.
   },
 };
+
+// ---------------------------------------------------------------------------
+// Validation, run once at load (index.ts). Pi loads this file without type
+// checking, so values are checked at runtime. The resolved Perplexity base URL
+// (environment override included) is checked by createPerplexity.
+function positiveInteger(value: number, name: string): void {
+  if (!Number.isSafeInteger(value) || value < 1) throw new WebToolsError('configuration', `${name} must be a positive integer.`);
+}
+function nonempty(value: string, name: string): void {
+  if (typeof value !== 'string' || !value.trim()) throw new WebToolsError('configuration', `${name} must not be empty.`);
+}
+const SearchDefaults = Type.Required(Type.Pick(SearchParams, ['max_results', 'search_context_size']));
+export function validateConfig(settings: WebToolsConfig): void {
+  const { search, fetch, output, perplexity } = settings;
+  // Unlike per-call overrides, defaults must be present. Reuse the field schemas.
+  if (!Check(SearchDefaults, { max_results: search.maxResults, search_context_size: search.contextSize })) {
+    throw new WebToolsError('configuration', 'search.maxResults must be an integer from 1 to 20 and search.contextSize one of low/medium/high.');
+  }
+  nonempty(fetch.defaultObjective, 'fetch.defaultObjective');
+  positiveInteger(output.maxLines, 'output.maxLines');
+  positiveInteger(output.maxBytes, 'output.maxBytes');
+  positiveInteger(perplexity.timeoutMs, 'perplexity.timeoutMs');
+  positiveInteger(perplexity.fetch.maxSteps, 'perplexity.fetch.maxSteps');
+  positiveInteger(perplexity.fetch.maxOutputTokens, 'perplexity.fetch.maxOutputTokens');
+  nonempty(perplexity.fetch.preset, 'perplexity.fetch.preset');
+}

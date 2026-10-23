@@ -3,12 +3,6 @@ import { WebToolsError } from './contracts.ts';
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
-export function optionalString(value: unknown): string | null {
-  return typeof value === 'string' ? value : null;
-}
-export function nonnegative(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
-}
 export function normalizeUrl(value: string): string {
   let url: URL;
   try { url = new URL(value); } catch { throw new WebToolsError('invalid_input', 'Provide an absolute HTTP(S) URL.'); }
@@ -17,11 +11,11 @@ export function normalizeUrl(value: string): string {
   }
   return url.href;
 }
-export function positiveInteger(value: number, name: string): void {
-  if (!Number.isSafeInteger(value) || value < 1) throw new WebToolsError('configuration', `${name} must be a positive integer.`);
-}
 
-/** One request, no retries. Never forward credentials through a redirect. */
+/**
+ * One request, no retries. Never forward credentials through a redirect.
+ * Callers pass a validated URL, a trimmed nonempty key, and a validated timeout.
+ */
 export async function postJson(options: {
   url: string;
   body: unknown;
@@ -31,15 +25,13 @@ export async function postJson(options: {
   provider: string;
 }): Promise<Record<string, unknown>> {
   const { apiKey, timeoutMs, signal, provider } = options;
-  if (!apiKey.trim()) throw new WebToolsError('authentication', `${provider} API key is missing.`);
-  positiveInteger(timeoutMs, `${provider}.timeoutMs`);
   const timeout = AbortSignal.timeout(timeoutMs);
   const combined = signal ? AbortSignal.any([signal, timeout]) : timeout;
   try {
     combined.throwIfAborted();
-    const response = await fetch(normalizeUrl(options.url), {
+    const response = await fetch(options.url, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${apiKey.trim()}`, 'Content-Type': 'application/json' },
+      headers: { Authorization: `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(options.body), signal: combined, redirect: 'error',
     });
     const raw = await response.text();
@@ -54,7 +46,7 @@ export async function postJson(options: {
         : isRecord(error) && typeof error.message === 'string' ? error.message
         : isRecord(payload) && typeof payload.message === 'string' ? payload.message : response.statusText;
       // No raw bodies. Scrub the credential even from structured API messages.
-      const safe = (message || 'Unknown API error').split(apiKey.trim()).join('[REDACTED]').slice(0, 500);
+      const safe = (message || 'Unknown API error').split(apiKey).join('[REDACTED]').slice(0, 500);
       throw new WebToolsError(response.status === 401 || response.status === 403 ? 'authentication' : 'http_error',
         `${provider} API error (HTTP ${response.status}): ${safe}`);
     }

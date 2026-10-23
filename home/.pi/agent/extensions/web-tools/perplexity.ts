@@ -5,23 +5,27 @@ import {
   type FetchInput, type FetchResult, type ProviderResponse,
   type Retriever, type SearchInput, type SearchResult, type Source,
 } from './contracts.ts';
-import { isRecord, nonnegative, normalizeUrl, optionalString, positiveInteger, postJson } from './transport.ts';
+import { isRecord, normalizeUrl, postJson } from './transport.ts';
 
 type Settings = WebToolsConfig['perplexity'];
+function optionalString(value: unknown): string | null {
+  return typeof value === 'string' ? value : null;
+}
+function nonnegative(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null;
+}
 function apiKey(settings: Settings): string {
   const key = process.env[settings.apiKeyEnv]?.trim();
   if (!key) throw new WebToolsError('authentication', `${settings.apiKeyEnv} is not set. Export it before starting Pi, then restart Pi.`);
   return key;
 }
-function baseUrl(settings: Settings): string {
-  return normalizeUrl((process.env[settings.baseUrlEnv]?.trim() || settings.baseUrl).replace(/\/+$/, '')).replace(/\/+$/, '');
-}
-function validateSettings(settings: Settings): void {
-  baseUrl(settings);
-  positiveInteger(settings.timeoutMs, 'perplexity.timeoutMs');
-  positiveInteger(settings.fetch.maxSteps, 'perplexity.fetch.maxSteps');
-  positiveInteger(settings.fetch.maxOutputTokens, 'perplexity.fetch.maxOutputTokens');
-  if (!settings.fetch.preset.trim()) throw new WebToolsError('configuration', 'perplexity.fetch.preset must not be empty.');
+// Snapshot the API root at construction; shell environment changes require a restart.
+function resolveBaseUrl(settings: Settings): string {
+  try {
+    return normalizeUrl(process.env[settings.baseUrlEnv]?.trim() || settings.baseUrl).replace(/\/+$/, '');
+  } catch {
+    throw new WebToolsError('configuration', `Perplexity API root (${settings.baseUrlEnv} or perplexity.baseUrl) must be an absolute HTTP(S) URL without credentials.`);
+  }
 }
 function source(value: unknown): Source | null {
   if (!isRecord(value) || typeof value.url !== 'string' || typeof value.snippet !== 'string') return null;
@@ -32,15 +36,17 @@ function source(value: unknown): Source | null {
     date: optionalString(value.date), last_updated: optionalString(value.last_updated),
   };
 }
+function costUsd(payload: Record<string, unknown>): number | null {
+  const usage = payload.usage;
+  return isRecord(usage) && isRecord(usage.cost) ? nonnegative(usage.cost.total_cost) : null;
+}
 function metadata(payload: Record<string, unknown>) {
-  const usage = isRecord(payload.usage) ? payload.usage : {};
-  const cost = isRecord(usage.cost) ? usage.cost : {};
-  return { ...emptyMetadata(), request_id: optionalString(payload.id), model: optionalString(payload.model), cost_usd: nonnegative(cost.total_cost) };
+  return { ...emptyMetadata(), request_id: optionalString(payload.id), model: optionalString(payload.model), cost_usd: costUsd(payload) };
 }
 export function toUsage(payload: Record<string, unknown>): Usage | undefined {
   if (!isRecord(payload.usage)) return undefined;
   const raw = payload.usage;
-  const cost = isRecord(raw.cost) ? nonnegative(raw.cost.total_cost) : null;
+  const cost = costUsd(payload);
   const input = nonnegative(raw.input_tokens ?? raw.prompt_tokens);
   const output = nonnegative(raw.output_tokens ?? raw.completion_tokens);
   if (cost === null && input === null && output === null) return undefined;
@@ -91,25 +97,25 @@ export function parseFetch(input: FetchInput, payload: Record<string, unknown>):
   // Missing status is accepted only with actual tool-result evidence. Explicit
   // non-final/failed statuses never become successful fetches.
   const final = payload.status === undefined || payload.status === 'completed';
-  const error = !final ? { code: 'retrieval_failed' as const, message: 'Perplexity fetch did not complete successfully.' }
-    : !hasToolResult ? { code: 'retrieval_failed' as const, message: 'Perplexity returned no fetch tool-result evidence; notes alone do not verify retrieval.' }
-    : !page ? { code: 'retrieval_failed' as const, message: 'Perplexity returned no source matching the requested URL; redirects are not verified.' } : null;
-  const warnings: string[] = [];
-  if (!page) warnings.push('No provider excerpt matched the requested URL. Model notes are not page content.');
-  if (page && !page.snippet?.trim()) warnings.push('The fetch tool returned the page URL but no readable text.');
+  const failure = !final ? 'Perplexity fetch did not complete successfully.'
+    : !hasToolResult ? 'Perplexity returned no fetch tool-result evidence; notes alone do not verify retrieval.'
+    : !page ? 'Perplexity returned no source matching the requested URL; redirects are not verified.' : null;
+  const readable = Boolean(page?.snippet.trim());
+  const warnings = !page ? ['No provider excerpt matched the requested URL. Model notes are not page content.']
+    : !readable ? ['The fetch tool returned the page URL but no readable text.'] : [];
   return {
     operation: 'fetch', url: input.url,
-    status: error ? 'error' : page?.snippet?.trim() ? 'ok' : 'not_found',
+    status: failure ? 'error' : readable ? 'ok' : 'not_found',
     source_url: page?.url ?? null, title: page?.title ?? null, content: page?.snippet ?? null,
     sources, report: notes.length ? notes.join('\n\n') : null,
     metadata: { ...metadata(payload), retrieval_evidence: hasToolResult ? 'tool_result' : 'none' },
-    warnings, error,
+    warnings, error: failure ? { code: 'retrieval_failed', message: failure } : null,
   };
 }
 export function createPerplexity(settings: Settings): Retriever {
+  const baseUrl = resolveBaseUrl(settings);
   async function request(path: string, body: unknown, signal?: AbortSignal) {
-    validateSettings(settings);
-    return postJson({ url: `${baseUrl(settings)}${path}`, body, apiKey: apiKey(settings),
+    return postJson({ url: `${baseUrl}${path}`, body, apiKey: apiKey(settings),
       timeoutMs: settings.timeoutMs, signal, provider: 'Perplexity' });
   }
   return {
