@@ -4,3 +4,8 @@ mode = "symlink-each"
 relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
+
+[tasks.format]
+description = "Format the Neovim config with StyLua"
+dir = "{{ config_root }}/home/.config/nvim"
+run = "stylua ."

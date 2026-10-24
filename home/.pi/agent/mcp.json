@@ -4,7 +4,8 @@
       "url": "https://radius.pi.dev/mcp",
       "auth": {
         "provider": "radius"
-      }
+      },
+      "enabled": true
     },
     "perplexity": {
       "url": "https://api.perplexity.ai/mcp",
@@ -14,7 +15,7 @@
       "timeout": 180,
       "exposure": "direct",
       "description": "Perplexity web search, answers, research, and reasoning",
-      "enabled": false
+      "enabled": true
     },
     "spacesheep": {
       "url": "https://mcp.spacesheep.dev/mcp",
