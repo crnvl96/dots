@@ -52,7 +52,7 @@ export function active(job: Job) {
 }
 
 export function lastAssistantText(messages: readonly AgentMessage[]) {
-  const last = [...messages].reverse().find((message) => message.role === 'assistant');
+  const last = messages.findLast((message) => message.role === 'assistant');
   if (last?.role !== 'assistant')
     return {
       text: '',

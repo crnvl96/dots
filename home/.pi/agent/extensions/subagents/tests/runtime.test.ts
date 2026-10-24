@@ -42,6 +42,7 @@ const parentModel = {
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 const childModel = { ...parentModel, id: 'child-model', provider: 'child-provider' };
+const plain = (text) => text;
 
 async function until(predicate) {
   const started = Date.now();
@@ -328,7 +329,7 @@ function observeChildLifecycle(t, h, shutdownGate) {
 }
 
 function system(request) {
-  const message = request.context.messages.find((message) => message.role === 'system') ?? {};
+  const message = request.context.messages.find((entry) => entry.role === 'system') ?? {};
   const sections = message.sections
     ? Object.values(message.sections).filter(Boolean).join('\n')
     : '';
@@ -458,7 +459,7 @@ test('finished jobs retain live sessions until discard and preserve bounded repo
   } = await h.launch([{ prompt: 'release heavy state' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find((job) => job.id === id);
+  const job = menu.actions.jobs().find((candidate) => candidate.id === id);
   h.ctx.executeTool = async () => ({
     result: {
       content: [{ type: 'text', text: 'HEAVY_TOOL_PAYLOAD'.repeat(10000) }],
@@ -653,7 +654,7 @@ for (const stopReason of ['error', 'aborted']) {
     const job = h.widgets
       .get('subagents.pi')
       .actions.jobs()
-      .find((job) => job.id === id);
+      .find((candidate) => candidate.id === id);
     h.requests[0].finish('recoverable findings', stopReason, { errorMessage: 'provider failed' });
     const result = (await h.call('subagents_wait', { ids: [id] })).structuredContent.agents[0];
     assert.equal(result.notification, 'failed');
@@ -979,7 +980,7 @@ test('passes model, provider, thinking, exact tools, system prompt and prompt to
   assert.deepEqual(
     system(request)
       .toolsAdded.map((tool) => tool.name)
-      .sort(),
+      .toSorted(),
     ['read', 'subagents_ask'],
   );
   assert.deepEqual(userTexts(request), ['my task']);
@@ -1015,11 +1016,11 @@ test('inherits model/thinking and all callable tools, without orchestration tool
   assert.deepEqual(
     system(h.requests[1])
       .toolsAdded.map((tool) => tool.name)
-      .sort(),
+      .toSorted(),
     ['read', 'subagents_ask'],
   );
   assert.deepEqual(userTexts(request), ['default task']);
-  h.requests.forEach((request) => request.finish());
+  h.requests.forEach((pending) => pending.finish());
   await until(() => h.notifications.length === 2);
 });
 
@@ -1062,7 +1063,7 @@ test('child sessions execute extension and MCP-named tools themselves, independe
     })),
   });
   await until(() => h.requests.length === 2);
-  assert.deepEqual(seen.map((call) => call.name).sort(), [
+  assert.deepEqual(seen.map((call) => call.name).toSorted(), [
     'mcp__example__search',
     'openrouter_web_search',
   ]);
@@ -1450,7 +1451,7 @@ test('progress tracks only running tool IDs and names, not outputs or history', 
   } = await h.launch([{ prompt: 'Read a file' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find((job) => job.id === id);
+  const job = menu.actions.jobs().find((candidate) => candidate.id === id);
   h.requests[0].finish('', 'toolUse', {
     content: [{ type: 'toolCall', id: 'active-read', name: 'slow_read', arguments: {} }],
   });
@@ -1561,7 +1562,7 @@ test('bounded history evicts in completion order even when timestamps tie', asyn
   } = await h.launch([{ prompt: 'oldest finished child' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find((job) => job.id === id);
+  const job = menu.actions.jobs().find((candidate) => candidate.id === id);
   h.requests[0].finish('Oldest answer');
   await until(() => h.notifications.length === 1);
   const completed = [];
@@ -1578,7 +1579,7 @@ test('bounded history evicts in completion order even when timestamps tie', asyn
   }
   const retained = (await h.call('subagents_status', {})).structuredContent.agents;
   assert.deepEqual(
-    retained.map((job) => job.id),
+    retained.map((candidate) => candidate.id),
     completed.slice(1),
   );
   await assert.rejects(h.call('subagents_status', { id }), /Unknown or no longer retained/);
@@ -1884,7 +1885,6 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     const renderer = new Renderer(terminal);
     const h = harness(t, 'tui', renderer);
     t.after(() => renderer.stop());
-    const plain = (text) => text;
     const editor = new CustomEditor(
       renderer,
       {

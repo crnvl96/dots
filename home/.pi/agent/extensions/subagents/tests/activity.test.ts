@@ -53,7 +53,7 @@ test('tool labels sanitize terminal sequences and keep full input for automatic 
   const label = toolActivity('bash', {
     command: '\x1b[31mnpm test\x1b[0m\n--watch\t' + '界'.repeat(200),
   });
-  assert.ok(!/[\x00-\x1f\x7f]/.test(label));
+  assert.doesNotMatch(label, /\p{Cc}/u);
   assert.ok(label.endsWith('界'.repeat(200)));
   assert.match(label, /^Running npm test --watch/);
   assert.equal(toolActivity('custom\n\x1b[31mtool', {}), 'Using custom tool');

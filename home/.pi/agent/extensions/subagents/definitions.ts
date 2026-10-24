@@ -88,7 +88,7 @@ function parseDefinition(filePath: string, source: AgentDefinition['source']): A
   }
   const unsupported = Object.keys(frontmatter)
     .filter((key) => !['name', 'description', 'model'].includes(key))
-    .sort(compare);
+    .toSorted(compare);
   if (unsupported.length)
     throw new InvalidNamedDefinition(
       name,
@@ -173,7 +173,7 @@ export function discoverAgents({
         if (stat.isDirectory()) {
           if (seenDirectories.has(canonical)) return;
           seenDirectories.add(canonical);
-          for (const entry of readdirSync(path).sort(compare)) visit(join(path, entry));
+          for (const entry of readdirSync(path).toSorted(compare)) visit(join(path, entry));
         } else if (extname(path).toLowerCase() === '.md') {
           if (!stat.isFile()) throw new Error('Definition is not a regular file');
           if (seenFiles.has(canonical)) return;
@@ -210,7 +210,10 @@ export function discoverAgents({
     };
     visit(root, true);
   }
-  return { agents: [...selected.values()].sort((a, b) => compare(a.name, b.name)), diagnostics };
+  return {
+    agents: [...selected.values()].toSorted((a, b) => compare(a.name, b.name)),
+    diagnostics,
+  };
 }
 
 export function definitionPrompt(definition: AgentDefinition): string {

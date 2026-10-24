@@ -32,6 +32,8 @@ export interface Runtime {
   setAttachUI: (attach: (ctx: ExtensionContext) => void) => void;
 }
 
+function noop() {}
+
 export function createRuntime(pi: ExtensionAPI): Runtime {
   const jobs = new Map<string, Job>();
   const usedNames = new Set<string>();
@@ -41,7 +43,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   let finishedOrder = 0;
   let timer: ReturnType<typeof setInterval> | undefined;
   let uiContext: ExtensionContext | undefined;
-  let attachUI = (_ctx: ExtensionContext) => {};
+  let attachUI: (ctx: ExtensionContext) => void = noop;
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
     return () => {
@@ -89,7 +91,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   async function prune() {
     const finished = [...jobs.values()]
       .filter((job) => job.settled)
-      .sort((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
+      .toSorted((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
     await discard(finished.slice(config.historyLimit));
   }
 
@@ -285,7 +287,7 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   function waitFor(selected: Job[], signal?: AbortSignal, timeoutMs?: number) {
     return new Promise<boolean>((resolve, reject) => {
       let deadline: ReturnType<typeof setTimeout> | undefined;
-      let unsubscribe = () => {};
+      let unsubscribe = noop;
       const finish = (timedOut: boolean, error?: unknown) => {
         unsubscribe();
         if (deadline) clearTimeout(deadline);

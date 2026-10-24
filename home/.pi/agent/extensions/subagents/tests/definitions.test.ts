@@ -5,6 +5,12 @@ import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { definitionPrompt, discoverAgents } from '../definitions.ts';
 
+function write(path, content) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, content);
+  return path;
+}
+
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), 'pi-agent-definitions-'));
   const homeDir = join(root, 'home');
@@ -12,11 +18,6 @@ function fixture(t) {
   mkdirSync(homeDir);
   mkdirSync(cwd);
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const write = (path, content) => {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, content);
-    return path;
-  };
   const agent = (base, convention, file, name, body = 'Review the code.', extra = '') =>
     write(
       join(base, convention, 'agents', file),

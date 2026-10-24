@@ -26,7 +26,7 @@ export function snapshot(job: Job, includeResult = false): Snapshot {
 
 export function oneLine(text: string) {
   return stripTerminalSequences(text)
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
+    .replace(/\p{Cc}/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
