@@ -6,9 +6,14 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format the Neovim, Pi, agents, Claude, and mise configs"
+description = "Format the Neovim and Pi"
 dir = "{{ config_root }}"
 run = [
   "(cd home/.config/nvim && stylua .)",
   "(cd home/.pi && ./node_modules/.bin/oxfmt .)",
 ]
+
+[tasks.lint]
+description = "Lint the Pi package with Oxlint"
+dir = "{{ config_root }}/home/.pi"
+run = "./node_modules/.bin/oxlint ."
