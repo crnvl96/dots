@@ -33,6 +33,7 @@ require('mini.snippets').setup({
 -- Include hidden files in MiniPick's rg-backed file and grep searches.
 vim.env.RIPGREP_CONFIG_PATH = vim.fn.stdpath('config') .. '/ripgreprc'
 require('mini.pick').setup()
+
 -- stylua: ignore start
 vim.keymap.set('n', '<Leader>ff', '<Cmd>lua MiniPick.builtin.files()<CR>', { desc = 'Find files' })
 vim.keymap.set('n', '<Leader>fg', '<Cmd>lua MiniPick.builtin.grep_live()<CR>', { desc = 'Live grep' })
