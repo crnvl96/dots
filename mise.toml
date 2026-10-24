@@ -6,7 +6,7 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.format]
-description = "Format the Neovim and Pi configs"
+description = "Format the Neovim, Pi, agents, Claude, and mise configs"
 dir = "{{ config_root }}"
 run = [
   "(cd home/.config/nvim && stylua .)",
