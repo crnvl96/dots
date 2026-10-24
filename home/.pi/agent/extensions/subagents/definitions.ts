@@ -1,4 +1,13 @@
-import { closeSync, fstatSync, lstatSync, openSync, readSync, readdirSync, realpathSync, statSync } from 'node:fs';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readSync,
+  readdirSync,
+  realpathSync,
+  statSync,
+} from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, extname, join, resolve } from 'node:path';
 import { parseFrontmatter } from '@earendil-works/pi-coding-agent';
@@ -17,8 +26,8 @@ export interface AgentCatalog {
 }
 
 const MAX_DEFINITION_BYTES = 128 * 1024;
-const compare = (a: string, b: string) => a < b ? -1 : a > b ? 1 : 0;
-const errorText = (error: unknown) => error instanceof Error ? error.message : String(error);
+const compare = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
+const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const missing = (error: unknown) => (error as NodeJS.ErrnoException)?.code === 'ENOENT';
 
 class InvalidNamedDefinition extends Error {
@@ -53,28 +62,50 @@ function readDefinition(filePath: string): string {
 function parseDefinition(filePath: string, source: AgentDefinition['source']): AgentDefinition {
   const content = readDefinition(filePath).replace(/\r\n/g, '\n');
   const lines = content.split('\n');
-  if (lines[0] !== '---') throw new Error('Definition must start with a first-line --- frontmatter delimiter');
+  if (lines[0] !== '---')
+    throw new Error('Definition must start with a first-line --- frontmatter delimiter');
   const end = lines.indexOf('---', 1);
   if (end < 0) throw new Error('Missing closing --- frontmatter delimiter');
   // Pi's parser accepts delimiter prefixes; enforce exact lines before calling it.
-  if (lines.slice(1, end).some(line => line.startsWith('---'))) {
+  if (lines.slice(1, end).some((line) => line.startsWith('---'))) {
     throw new Error('Invalid frontmatter delimiter');
   }
-  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(lines.slice(0, end + 1).join('\n') + '\n');
+  const { frontmatter } = parseFrontmatter<Record<string, unknown>>(
+    lines.slice(0, end + 1).join('\n') + '\n',
+  );
   if (!frontmatter || typeof frontmatter !== 'object' || Array.isArray(frontmatter)) {
     throw new Error('Frontmatter must be a YAML mapping');
   }
   const { name, description } = frontmatter;
-  if (typeof name !== 'string' || name.length > 64 || !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)) {
-    throw new Error('name must be a nonempty kebab-case string starting with a letter (at most 64 characters)');
+  if (
+    typeof name !== 'string' ||
+    name.length > 64 ||
+    !/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)
+  ) {
+    throw new Error(
+      'name must be a nonempty kebab-case string starting with a letter (at most 64 characters)',
+    );
   }
-  const unsupported = Object.keys(frontmatter).filter(key => !['name', 'description', 'model'].includes(key)).sort(compare);
-  if (unsupported.length) throw new InvalidNamedDefinition(name, `Unsupported frontmatter fields: ${unsupported.join(', ')}; only name, description, and model: inherit are supported`);
+  const unsupported = Object.keys(frontmatter)
+    .filter((key) => !['name', 'description', 'model'].includes(key))
+    .sort(compare);
+  if (unsupported.length)
+    throw new InvalidNamedDefinition(
+      name,
+      `Unsupported frontmatter fields: ${unsupported.join(', ')}; only name, description, and model: inherit are supported`,
+    );
   if (Object.hasOwn(frontmatter, 'model') && frontmatter.model !== 'inherit') {
-    throw new InvalidNamedDefinition(name, 'Unsupported frontmatter model; only model: inherit is supported');
+    throw new InvalidNamedDefinition(
+      name,
+      'Unsupported frontmatter model; only model: inherit is supported',
+    );
   }
-  if (typeof description !== 'string' || !description.trim()) throw new InvalidNamedDefinition(name, 'description must be a nonempty string');
-  const body = lines.slice(end + 1).join('\n').trim();
+  if (typeof description !== 'string' || !description.trim())
+    throw new InvalidNamedDefinition(name, 'description must be a nonempty string');
+  const body = lines
+    .slice(end + 1)
+    .join('\n')
+    .trim();
   if (!body) throw new InvalidNamedDefinition(name, 'Definition body must not be empty');
   return { name, description: description.trim(), filePath, body, source };
 }
@@ -95,7 +126,11 @@ function projectDirectories(cwd: string, diagnostics: string[]): string[] {
 }
 
 /** Fresh synchronous discovery only: this never executes a definition or caches its contents. */
-export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true }: {
+export function discoverAgents({
+  cwd,
+  homeDir = homedir(),
+  projectTrusted = true,
+}: {
   cwd: string;
   homeDir?: string;
   projectTrusted?: boolean;
@@ -109,7 +144,12 @@ export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true
   // Highest priority first is important: the same real file may occur at both
   // project and user paths through symlinks.
   const locations: { directory: string; source: AgentDefinition['source'] }[] = [
-    ...(projectTrusted ? projectDirectories(resolve(cwd), diagnostics).map(directory => ({ directory, source: 'project' as const })) : []),
+    ...(projectTrusted
+      ? projectDirectories(resolve(cwd), diagnostics).map((directory) => ({
+          directory,
+          source: 'project' as const,
+        }))
+      : []),
     { directory: resolve(homeDir), source: 'user' },
   ];
   for (const { directory, source } of locations) {
@@ -121,7 +161,12 @@ export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true
         // Only absent roots are silent; dangling symlinks and disappearing
         // entries inside an existing root are actionable I/O diagnostics.
         if (isRoot) {
-          try { lstatSync(path); } catch (error) { if (missing(error)) return; throw error; }
+          try {
+            lstatSync(path);
+          } catch (error) {
+            if (missing(error)) return;
+            throw error;
+          }
         }
         const canonical = realpathSync(path);
         const stat = statSync(canonical);
@@ -136,11 +181,14 @@ export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true
           const definition = parseDefinition(canonical, source);
           const duplicate = namesAtPriority.get(definition.name);
           if (duplicate) {
-            diagnostics.push(`${path}: duplicate agent name "${definition.name}" at the same priority; first definition: ${duplicate}`);
+            diagnostics.push(
+              `${path}: duplicate agent name "${definition.name}" at the same priority; first definition: ${duplicate}`,
+            );
             return;
           }
           namesAtPriority.set(definition.name, canonical);
-          if (!selected.has(definition.name) && !blockedNames.has(definition.name)) selected.set(definition.name, definition);
+          if (!selected.has(definition.name) && !blockedNames.has(definition.name))
+            selected.set(definition.name, definition);
         } else if (isRoot) {
           throw new Error('Agent discovery root is not a directory');
         }
@@ -148,11 +196,14 @@ export function discoverAgents({ cwd, homeDir = homedir(), projectTrusted = true
         if (error instanceof InvalidNamedDefinition) {
           blockedNames.add(error.agentName);
           if (!namesAtPriority.has(error.agentName)) namesAtPriority.set(error.agentName, path);
-          diagnostics.push(`${path}: ${errorText(error)}; agent "${error.agentName}" will not fall back to a lower-priority definition`);
+          diagnostics.push(
+            `${path}: ${errorText(error)}; agent "${error.agentName}" will not fall back to a lower-priority definition`,
+          );
         } else {
-          const limitation = extname(path).toLowerCase() === '.md'
-            ? '; could not determine a valid agent name, so a lower-priority definition may still be available'
-            : '';
+          const limitation =
+            extname(path).toLowerCase() === '.md'
+              ? '; could not determine a valid agent name, so a lower-priority definition may still be available'
+              : '';
           diagnostics.push(`${path}: ${errorText(error)}${limitation}`);
         }
       }

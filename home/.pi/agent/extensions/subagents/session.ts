@@ -1,9 +1,18 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { Model } from '@earendil-works/pi-ai';
 import {
-  createAgentSession, createCodemodeExtension, createMcpExtension, createToolSearchExtension,
-  DefaultResourceLoader, getAgentDir, SessionManager, SettingsManager,
-  type AgentSession, type ExtensionAPI, type ExtensionToolContext, type InlineExtension,
+  createAgentSession,
+  createCodemodeExtension,
+  createMcpExtension,
+  createToolSearchExtension,
+  DefaultResourceLoader,
+  getAgentDir,
+  SessionManager,
+  SettingsManager,
+  type AgentSession,
+  type ExtensionAPI,
+  type ExtensionToolContext,
+  type InlineExtension,
 } from '@earendil-works/pi-coding-agent';
 import { config } from './config.ts';
 import { lastAssistantText, type TaskInput } from './contracts.ts';
@@ -34,9 +43,12 @@ interface HostContext extends ExtensionToolContext {
 function parentRuntime(ctx: ExtensionToolContext) {
   const registry = ctx.modelRegistry;
   return {
-    streamSimple: (model: Model<any>, context: unknown, options?: unknown) => registry.streamSimple(model, context as never, options as never),
+    streamSimple: (model: Model<any>, context: unknown, options?: unknown) =>
+      registry.streamSimple(model, context as never, options as never),
     stream: (model: Model<any>, context: unknown, options?: unknown) =>
-      typeof registry.stream === 'function' ? registry.stream(model, context as never, options as never) : registry.streamSimple(model, context as never, options as never),
+      typeof registry.stream === 'function'
+        ? registry.stream(model, context as never, options as never)
+        : registry.streamSimple(model, context as never, options as never),
     hasConfiguredAuth: () => true,
     checkAuth: async () => undefined,
     isUsingOAuth: () => false,
@@ -60,22 +72,30 @@ export async function closeChildSession(session: AgentSession) {
 }
 
 /** Preserve the parent prompt; the selected role is inserted by the runtime, not read on request by the model. */
-export function resolveChildSystemPrompt(task: TaskInput, ctx: ExtensionToolContext, definition?: AgentDefinition): string | undefined {
+export function resolveChildSystemPrompt(
+  task: TaskInput,
+  ctx: ExtensionToolContext,
+  definition?: AgentDefinition,
+): string | undefined {
   const parent = ctx.getSystemPrompt?.();
   if (parent === undefined) return undefined;
   return [parent, ...childPromptParts(task, definition)].filter(Boolean).join('\n\n');
 }
 
 function childPromptParts(task: TaskInput, definition?: AgentDefinition) {
-  return [childPromptAppendix, definition && definitionPrompt(definition), task.appendSystemPrompt?.trim()]
-    .filter((part): part is string => Boolean(part));
+  return [
+    childPromptAppendix,
+    definition && definitionPrompt(definition),
+    task.appendSystemPrompt?.trim(),
+  ].filter((part): part is string => Boolean(part));
 }
 
 export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
   const provider = task.provider ?? ctx.model?.provider;
   const modelId = task.model ?? ctx.model?.id;
   const model = provider && modelId ? ctx.modelRegistry.find(provider, modelId) : undefined;
-  if (!model) throw new Error(`Unknown subagent model: ${provider ?? '(unset)'}/${modelId ?? '(unset)'}`);
+  if (!model)
+    throw new Error(`Unknown subagent model: ${provider ?? '(unset)'}/${modelId ?? '(unset)'}`);
   return model;
 }
 
@@ -83,7 +103,8 @@ export function resolveModel(task: TaskInput, ctx: ExtensionToolContext) {
 export async function openChildSession(input: OpenChildInput): Promise<OpenedChild> {
   const host = input.ctx as HostContext;
   const task = input.task;
-  if (task.agent && input.definition?.name !== task.agent) throw new Error(`Agent definition was not resolved: ${task.agent}`);
+  if (task.agent && input.definition?.name !== task.agent)
+    throw new Error(`Agent definition was not resolved: ${task.agent}`);
   if (!task.prompt.trim()) throw new Error('Subagent prompt must not be blank.');
   const model = resolveModel(task, input.ctx);
   const agentDir = host.agentDir || getAgentDir();
@@ -94,9 +115,12 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
   );
   const clear = { run: () => {} };
   const asked = askTool((feedback) => input.onAsk(feedback.message, feedback.kind));
-  const explicitTools = task.tools === undefined ? undefined
-    : task.tools.length === 0 ? []
-      : [...new Set([...task.tools, config.askTool])];
+  const explicitTools =
+    task.tools === undefined
+      ? undefined
+      : task.tools.length === 0
+        ? []
+        : [...new Set([...task.tools, config.askTool])];
   const isolated = Boolean(host.agentDir);
   const forcedPrompt = resolveChildSystemPrompt(task, input.ctx, input.definition);
   const resourceLoader = new DefaultResourceLoader({
@@ -113,9 +137,14 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
       ...(isolated ? [] : [createMcpExtension()]),
       (pi) => {
         // Queued guidance must not restart a failed run. SDK retries still decide recovery.
-        pi.on('agent_end', (event) => { if (lastAssistantText(event.messages).error) clear.run(); });
+        pi.on('agent_end', (event) => {
+          if (lastAssistantText(event.messages).error) clear.run();
+        });
       },
-      (pi) => { if (explicitTools === undefined || explicitTools.includes(config.askTool)) pi.registerTool(asked); },
+      (pi) => {
+        if (explicitTools === undefined || explicitTools.includes(config.askTool))
+          pi.registerTool(asked);
+      },
       ...(host.extensionFactories ?? []),
       // After inherited extensions so a rebuilt child prompt cannot replace the parent's text.
       (pi) => {
@@ -137,7 +166,10 @@ export async function openChildSession(input: OpenChildInput): Promise<OpenedChi
     settingsManager,
     resourceLoader,
     sessionManager: SessionManager.inMemory(input.ctx.cwd),
-    scopedModels: input.ctx.scopedModels?.map((scoped) => ({ model: scoped.model, thinkingLevel: scoped.thinkingLevel })),
+    scopedModels: input.ctx.scopedModels?.map((scoped) => ({
+      model: scoped.model,
+      thinkingLevel: scoped.thinkingLevel,
+    })),
     ...(explicitTools ? { tools: explicitTools } : {}),
   });
   try {

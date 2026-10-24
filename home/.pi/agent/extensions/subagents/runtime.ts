@@ -1,5 +1,11 @@
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
-import { truncateHead, type AgentSessionEvent, type ExtensionAPI, type ExtensionContext, type ExtensionToolContext } from '@earendil-works/pi-coding-agent';
+import {
+  truncateHead,
+  type AgentSessionEvent,
+  type ExtensionAPI,
+  type ExtensionContext,
+  type ExtensionToolContext,
+} from '@earendil-works/pi-coding-agent';
 import { truncateToWidth } from '@earendil-works/pi-tui';
 import { config } from './config.ts';
 import { updateActivity } from './activity.ts';
@@ -13,7 +19,11 @@ import type { TaskInput } from './contracts.ts';
 export interface Runtime {
   jobs: Map<string, Job>;
   subscribe: (listener: () => void) => () => void;
-  launch: (tasks: TaskInput[], signal: AbortSignal | undefined, ctx: ExtensionToolContext) => Promise<Job[]>;
+  launch: (
+    tasks: TaskInput[],
+    signal: AbortSignal | undefined,
+    ctx: ExtensionToolContext,
+  ) => Promise<Job[]>;
   steer: (job: Job, prompt: string) => void;
   waitFor: (selected: Job[], signal?: AbortSignal, timeoutMs?: number) => Promise<boolean>;
   discard: (selected: Job[]) => Promise<void>;
@@ -34,16 +44,25 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   let attachUI = (_ctx: ExtensionContext) => {};
   const subscribe = (listener: () => void) => {
     listeners.add(listener);
-    return () => { listeners.delete(listener); };
+    return () => {
+      listeners.delete(listener);
+    };
   };
 
   function refresh() {
     if (uiContext && [...jobs.values()].some(active)) {
-      if (!timer) { timer = setInterval(refresh, 100); timer.unref(); }
-    } else if (timer) { clearInterval(timer); timer = undefined; }
+      if (!timer) {
+        timer = setInterval(refresh, 100);
+        timer.unref();
+      }
+    } else if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
     for (const listener of listeners) {
-      try { listener(); }
-      catch (error) {
+      try {
+        listener();
+      } catch (error) {
         listeners.delete(listener);
         console.error('subagents.pi: UI observer failed:', error);
       }
@@ -62,11 +81,15 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
       console.error(`subagents.pi: could not close ${job.id}:`, error);
     });
     releasing.add(closing);
-    return closing.finally(() => { releasing.delete(closing); });
+    return closing.finally(() => {
+      releasing.delete(closing);
+    });
   }
 
   async function prune() {
-    const finished = [...jobs.values()].filter((job) => job.settled).sort((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
+    const finished = [...jobs.values()]
+      .filter((job) => job.settled)
+      .sort((a, b) => (b.finishedOrder ?? 0) - (a.finishedOrder ?? 0));
     await discard(finished.slice(config.historyLimit));
   }
 
@@ -86,20 +109,29 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     job.finishedAt = Date.now();
     job.finishedOrder = ++finishedOrder;
     job.pendingSteers = 0;
-    job.activity = job.status === 'stopped' ? 'Stopped by user' : error ?? 'Finished';
+    job.activity = job.status === 'stopped' ? 'Stopped by user' : (error ?? 'Finished');
     refresh();
     const report = await boundedReport(job, response, error);
     if (job.cancelled) return;
     job.result = report.content;
     job.fullOutputPath = report.fullOutputPath;
     try {
-      pi.sendMessage({
-        customType: config.widgetId, content: report.content, display: true,
-        details: {
-          id: job.id, status: job.status, prompt: job.prompt, model: job.model,
-          provider: job.provider, fullOutputPath: report.fullOutputPath,
+      pi.sendMessage(
+        {
+          customType: config.widgetId,
+          content: report.content,
+          display: true,
+          details: {
+            id: job.id,
+            status: job.status,
+            prompt: job.prompt,
+            model: job.model,
+            provider: job.provider,
+            fullOutputPath: report.fullOutputPath,
+          },
         },
-      }, { triggerTurn: true, deliverAs: 'steer' });
+        { triggerTurn: true, deliverAs: 'steer' },
+      );
       job.notification = 'queued';
     } catch (failure) {
       job.notification = 'failed';
@@ -127,21 +159,24 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   function watch(job: Job) {
     const session = job.session!;
     job.unsubscribe = session.subscribe((event) => progress(job, event));
-    job.done = run(job).catch((failure) => {
-      job.notification = 'failed';
-      job.notificationError = failure instanceof Error ? failure.message : String(failure);
-      console.error(`subagents.pi: could not deliver ${job.id}:`, failure);
-    }).finally(async () => {
-      job.done = undefined;
-      job.settled = true;
-      await prune();
-      refresh();
-    });
+    job.done = run(job)
+      .catch((failure) => {
+        job.notification = 'failed';
+        job.notificationError = failure instanceof Error ? failure.message : String(failure);
+        console.error(`subagents.pi: could not deliver ${job.id}:`, failure);
+      })
+      .finally(async () => {
+        job.done = undefined;
+        job.settled = true;
+        await prune();
+        refresh();
+      });
   }
 
   function steer(job: Job, prompt: string) {
     if (!prompt.trim()) throw new Error('Steering prompt must not be blank.');
-    if (jobs.get(job.id) !== job || job.cancelled || job.status !== 'running' || !job.session) throw new Error(`Subagent is not running: ${job.id}`);
+    if (jobs.get(job.id) !== job || job.cancelled || job.status !== 'running' || !job.session)
+      throw new Error(`Subagent is not running: ${job.id}`);
     job.pendingSteers++;
     void job.session.steer(prompt).catch((error) => {
       job.pendingSteers = Math.max(0, job.pendingSteers - 1);
@@ -157,16 +192,25 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     deliverFeedback(pi, { id: job.id, kind, message });
   }
 
-  async function launch(tasks: TaskInput[], signal: AbortSignal | undefined, ctx: ExtensionToolContext) {
+  async function launch(
+    tasks: TaskInput[],
+    signal: AbortSignal | undefined,
+    ctx: ExtensionToolContext,
+  ) {
     signal?.throwIfAborted();
     if (!tasks.length) throw new Error('At least one subagent task is required.');
     // Resolve all requested roles from one fresh scan before reserving names or opening sessions.
     // The body is snapshotted for this launch; later filesystem edits affect only later launches.
-    const catalog = tasks.some((task) => task.agent !== undefined) ? catalogForContext(ctx) : undefined;
+    const catalog = tasks.some((task) => task.agent !== undefined)
+      ? catalogForContext(ctx)
+      : undefined;
     const definitions = tasks.map((task) => {
       if (task.agent === undefined) return undefined;
       const definition = catalog?.agents.find((item) => item.name === task.agent);
-      if (!definition) throw new Error(`Unknown or invalid agent definition: ${task.agent}. Use subagents_list for available names and discovery diagnostics.`);
+      if (!definition)
+        throw new Error(
+          `Unknown or invalid agent definition: ${task.agent}. Use subagents_list for available names and discovery diagnostics.`,
+        );
       return definition;
     });
     const batchNames = new Set<string>();
@@ -175,11 +219,19 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     const thinkingLevel = (ctx.thinkingLevel ?? pi.getThinkingLevel()) as ThinkingLevel;
     try {
       for (const task of tasks) {
-        if (typeof task.name !== 'string' || task.name.length > config.nameMaxLength || task.name.trim() !== task.name || !new RegExp(config.namePattern).test(task.name)) {
-          throw new Error(`Subagent name must be 1–${config.nameMaxLength} characters in lowercase kebab-case, starting with a letter (e.g. review-parser).`);
+        if (
+          typeof task.name !== 'string' ||
+          task.name.length > config.nameMaxLength ||
+          task.name.trim() !== task.name ||
+          !new RegExp(config.namePattern).test(task.name)
+        ) {
+          throw new Error(
+            `Subagent name must be 1–${config.nameMaxLength} characters in lowercase kebab-case, starting with a letter (e.g. review-parser).`,
+          );
         }
         if (!task.prompt.trim()) throw new Error('Subagent prompt must not be blank.');
-        if (batchNames.has(task.name) || usedNames.has(task.name)) throw new Error(`Subagent name already used in this session or batch: ${task.name}`);
+        if (batchNames.has(task.name) || usedNames.has(task.name))
+          throw new Error(`Subagent name already used in this session or batch: ${task.name}`);
         resolveModel(task, ctx);
         batchNames.add(task.name);
         usedNames.add(task.name);
@@ -189,18 +241,30 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
         signal?.throwIfAborted();
         const definition = definitions[index];
         const child = await openChildSession({
-          task, definition, ctx, pi, thinkingLevel,
+          task,
+          definition,
+          ctx,
+          pi,
+          thinkingLevel,
           onAsk: (message, kind) => {
             const job = jobs.get(task.name);
             if (job) ask(job, message, kind);
           },
         });
         const job: Job = {
-          id: task.name, session: child.session,
-          model: child.modelId, provider: child.provider, prompt: task.prompt,
+          id: task.name,
+          session: child.session,
+          model: child.modelId,
+          provider: child.provider,
+          prompt: task.prompt,
           ...(definition ? { agentType: definition.name, agentFile: definition.filePath } : {}),
-          cancelled: false, status: 'running', startedAt: Date.now(), activity: 'Starting',
-          pendingSteers: 0, tools: new Map(), notification: 'pending',
+          cancelled: false,
+          status: 'running',
+          startedAt: Date.now(),
+          activity: 'Starting',
+          pendingSteers: 0,
+          tools: new Map(),
+          notification: 'pending',
         };
         opened.push(job);
       }
@@ -231,7 +295,8 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
       };
       const abort = () => finish(false, signal?.reason ?? new Error('Subagent wait aborted.'));
       const check = () => {
-        if (selected.some((job) => job.cancelled)) finish(false, new Error('Subagent wait cancelled: the session changed or shut down.'));
+        if (selected.some((job) => job.cancelled))
+          finish(false, new Error('Subagent wait cancelled: the session changed or shut down.'));
         else if (selected.every((job) => job.settled)) finish(false);
       };
       unsubscribe = subscribe(check);
@@ -252,7 +317,10 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
     const pending = [...jobs.values()];
     jobs.clear();
     usedNames.clear();
-    if (timer) { clearInterval(timer); timer = undefined; }
+    if (timer) {
+      clearInterval(timer);
+      timer = undefined;
+    }
     uiContext?.ui.setWidget(config.widgetId, undefined);
     uiContext = undefined;
     for (const job of pending) {
@@ -271,27 +339,54 @@ export function createRuntime(pi: ExtensionAPI): Runtime {
   pi.on('session_tree', cleanup);
 
   return {
-    jobs, subscribe, launch, steer, waitFor, discard, refresh,
+    jobs,
+    subscribe,
+    launch,
+    steer,
+    waitFor,
+    discard,
+    refresh,
     attachUI: (ctx) => {
       if (ctx.mode !== 'tui' || uiContext) return;
       uiContext = ctx;
       attachUI(ctx);
       refresh();
     },
-    setAttachUI: (attach) => { attachUI = attach; },
+    setAttachUI: (attach) => {
+      attachUI = attach;
+    },
   };
 }
 
 export function statusText(agents: ReturnType<typeof snapshot>[], detailed: boolean) {
   if (!agents.length) return 'No retained subagents in this session.';
-  return agents.map((item) => `${item.id} · ${item.status} · ${item.activity}\nTask: ${truncateToWidth(oneLine(item.prompt), 160)}`
-    + (detailed ? `\nNotification: ${item.notification}${item.notificationError ? ` (${item.notificationError})` : ''}\n\n${item.result ?? '(No final report yet.)'}` : '')).join('\n\n');
+  return agents
+    .map(
+      (item) =>
+        `${item.id} · ${item.status} · ${item.activity}\nTask: ${truncateToWidth(oneLine(item.prompt), 160)}` +
+        (detailed
+          ? `\nNotification: ${item.notification}${item.notificationError ? ` (${item.notificationError})` : ''}\n\n${item.result ?? '(No final report yet.)'}`
+          : ''),
+    )
+    .join('\n\n');
 }
 
 export function waitText(timedOut: boolean, agents: ReturnType<typeof snapshot>[]) {
-  const report = truncateHead([
-    timedOut ? 'Wait timed out; unfinished children continue in the background.' : 'All selected subagents have finished. Check their statuses before depending on results.',
-    ...agents.map((agent) => `${agent.id} · ${agent.status} · ${agent.activity}\n\n${agent.result ?? '(No final report yet.)'}`),
-  ].join('\n\n'));
-  return report.content + (report.truncated ? '\n\n[Combined output truncated. Use subagents_status with an exact ID to recover individual reports.]' : '');
+  const report = truncateHead(
+    [
+      timedOut
+        ? 'Wait timed out; unfinished children continue in the background.'
+        : 'All selected subagents have finished. Check their statuses before depending on results.',
+      ...agents.map(
+        (agent) =>
+          `${agent.id} · ${agent.status} · ${agent.activity}\n\n${agent.result ?? '(No final report yet.)'}`,
+      ),
+    ].join('\n\n'),
+  );
+  return (
+    report.content +
+    (report.truncated
+      ? '\n\n[Combined output truncated. Use subagents_status with an exact ID to recover individual reports.]'
+      : '')
+  );
 }

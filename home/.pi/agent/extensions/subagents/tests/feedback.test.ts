@@ -10,8 +10,14 @@ import extension from '../index.ts';
 import { askDescription, childPromptAppendix, launchGuidelines } from '../prompts.ts';
 
 const model = {
-  id: 'parent-model', provider: 'parent-provider', api: 'openai-completions', name: 'Parent',
-  reasoning: true, input: ['text'], contextWindow: 100_000, maxTokens: 8192,
+  id: 'parent-model',
+  provider: 'parent-provider',
+  api: 'openai-completions',
+  name: 'Parent',
+  reasoning: true,
+  input: ['text'],
+  contextWindow: 100_000,
+  maxTokens: 8192,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 
@@ -32,15 +38,25 @@ test('ask notifies immediately; a blocked child finishes and the answer starts a
   const requests = [];
   const events = new Map();
   const pi = {
-    registerTool(tool) { tools.set(tool.name, tool); },
-    on(name, handler) { events.set(name, handler); },
+    registerTool(tool) {
+      tools.set(tool.name, tool);
+    },
+    on(name, handler) {
+      events.set(name, handler);
+    },
     getThinkingLevel: () => 'low',
     getSettings: () => ({ retry: { enabled: false }, cacheWarming: 'off' }),
-    sendMessage(message, options) { notifications.push({ message, options }); },
+    sendMessage(message, options) {
+      notifications.push({ message, options });
+    },
   };
   extension(pi);
   const ctx = {
-    mode: 'print', cwd: directory, agentDir: directory, model, thinkingLevel: 'medium',
+    mode: 'print',
+    cwd: directory,
+    agentDir: directory,
+    model,
+    thinkingLevel: 'medium',
     isProjectTrusted: () => true,
     ui: { theme: {}, setWidget() {}, notify() {} },
     tools: [],
@@ -51,16 +67,30 @@ test('ask notifies immediately; a blocked child finishes and the answer starts a
         const request = {
           finish(text, stopReason = 'stop', extra = {}) {
             const message = {
-              role: 'assistant', content: [{ type: 'text', text }],
-              api: selected.api, provider: selected.provider, model: selected.id,
-              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason, timestamp: Date.now(), ...extra,
+              role: 'assistant',
+              content: [{ type: 'text', text }],
+              api: selected.api,
+              provider: selected.provider,
+              model: selected.id,
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason,
+              timestamp: Date.now(),
+              ...extra,
             };
             stream.push({ type: 'done', reason: stopReason, message });
             stream.end();
           },
         };
-        options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), { once: true });
+        options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), {
+          once: true,
+        });
         requests.push(request);
         return stream;
       },
@@ -68,10 +98,25 @@ test('ask notifies immediately; a blocked child finishes and the answer starts a
   };
   t.after(() => events.get('session_shutdown')());
   const call = (name, params) => tools.get(name).execute('call', params, undefined, undefined, ctx);
-  const launched = tools.get('subagents_launch').execute('call', { tasks: [{ name: 'review-parser', prompt: 'Find the gap' }] }, undefined, undefined, ctx);
+  const launched = tools
+    .get('subagents_launch')
+    .execute(
+      'call',
+      { tasks: [{ name: 'review-parser', prompt: 'Find the gap' }] },
+      undefined,
+      undefined,
+      ctx,
+    );
   await until(() => requests.length === 1);
   requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'ask-1', name: 'subagents_ask', arguments: { message: 'The parser has no test for empty input.', kind: 'decision' } }],
+    content: [
+      {
+        type: 'toolCall',
+        id: 'ask-1',
+        name: 'subagents_ask',
+        arguments: { message: 'The parser has no test for empty input.', kind: 'decision' },
+      },
+    ],
   });
   await until(() => notifications.some((item) => item.message.details?.feedback));
   const ask = notifications.find((item) => item.message.details.feedback);
@@ -86,11 +131,22 @@ test('ask notifies immediately; a blocked child finishes and the answer starts a
   requests[1].finish('Blocked: I need your decision about empty input.');
   await launched;
   await call('subagents_wait', { ids: ['review-parser'] });
-  const late = await call('subagents_steer', { id: 'review-parser', prompt: 'Reject empty input.' });
+  const late = await call('subagents_steer', {
+    id: 'review-parser',
+    prompt: 'Reject empty input.',
+  });
   assert.equal(late.structuredContent.accepted, false);
   assert.equal(late.structuredContent.agent.status, 'completed');
   assert.equal(requests.length, 2, 'A finished child is not resumed.');
-  await call('subagents_launch', { tasks: [{ name: 'fix-parser', prompt: 'The review found no empty-input test. Decision: reject empty input.', tools: [] }] });
+  await call('subagents_launch', {
+    tasks: [
+      {
+        name: 'fix-parser',
+        prompt: 'The review found no empty-input test. Decision: reject empty input.',
+        tools: [],
+      },
+    ],
+  });
   await until(() => requests.length === 3);
   requests[2].finish('Added the missing test.');
   const result = await call('subagents_wait', { ids: ['fix-parser'] });

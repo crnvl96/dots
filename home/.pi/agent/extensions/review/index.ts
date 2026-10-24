@@ -1,14 +1,17 @@
-import { createRequire } from "node:module";
-import { closeSync, existsSync, openSync, readSync, realpathSync } from "node:fs";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { createRequire } from 'node:module';
+import { closeSync, existsSync, openSync, readSync, realpathSync } from 'node:fs';
+import type { ExtensionAPI } from '@earendil-works/pi-coding-agent';
 
 type GlimpseModule = {
-  open: (html: string, options?: { width?: number; height?: number; title?: string }) => GlimpseWindow;
+  open: (
+    html: string,
+    options?: { width?: number; height?: number; title?: string },
+  ) => GlimpseWindow;
   getNativeHostInfo: () => { path: string; platform: string; buildHint: string };
 };
 
-function machArch(path: string): "arm64" | "x64" | "universal" | undefined {
-  const fd = openSync(path, "r");
+function machArch(path: string): 'arm64' | 'x64' | 'universal' | undefined {
+  const fd = openSync(path, 'r');
   const header = Buffer.alloc(8);
   try {
     if (readSync(fd, header, 0, 8, 0) < 8) return undefined;
@@ -17,7 +20,7 @@ function machArch(path: string): "arm64" | "x64" | "universal" | undefined {
   }
 
   const magic = header.readUInt32BE(0);
-  if (magic === 0xcafebabe || magic === 0xbebafeca) return "universal";
+  if (magic === 0xcafebabe || magic === 0xbebafeca) return 'universal';
 
   const little = header.readUInt32LE(0);
   const isLittle = little === 0xfeedfacf || little === 0xfeedface;
@@ -25,8 +28,8 @@ function machArch(path: string): "arm64" | "x64" | "universal" | undefined {
   if (!isLittle && !isBig) return undefined;
 
   const cpu = (isLittle ? header.readUInt32LE(4) : header.readUInt32BE(4)) & ~0x01000000;
-  if (cpu === 12) return "arm64";
-  if (cpu === 7) return "x64";
+  if (cpu === 12) return 'arm64';
+  if (cpu === 7) return 'x64';
   return undefined;
 }
 
@@ -34,27 +37,29 @@ function loadGlimpse(): { glimpse: GlimpseModule } | { reason: string } {
   let glimpse: GlimpseModule;
   try {
     // Pi loads this file through ~/.pi/agent/extensions, which has no node_modules.
-    glimpse = createRequire(realpathSync(__filename))("glimpseui");
+    glimpse = createRequire(realpathSync(__filename))('glimpseui');
   } catch {
     return {
-      reason: "glimpseui is not installed. Run npm install in home/.pi of this dotfiles checkout.",
+      reason: 'glimpseui is not installed. Run npm install in home/.pi of this dotfiles checkout.',
     };
   }
 
-  let host: ReturnType<GlimpseModule["getNativeHostInfo"]>;
+  let host: ReturnType<GlimpseModule['getNativeHostInfo']>;
   try {
     host = glimpse.getNativeHostInfo();
   } catch (error) {
-    return { reason: error instanceof Error ? error.message : "Glimpse is not available on this platform." };
+    return {
+      reason: error instanceof Error ? error.message : 'Glimpse is not available on this platform.',
+    };
   }
 
-  if (host.platform !== "linux-chromium" && !existsSync(host.path)) {
+  if (host.platform !== 'linux-chromium' && !existsSync(host.path)) {
     return { reason: `Glimpse binary is missing. ${host.buildHint}` };
   }
 
-  if (process.platform === "darwin" && existsSync(host.path)) {
+  if (process.platform === 'darwin' && existsSync(host.path)) {
     const arch = machArch(host.path);
-    if (arch && arch !== "universal" && arch !== process.arch) {
+    if (arch && arch !== 'universal' && arch !== process.arch) {
       return {
         reason: `Glimpse binary is ${arch}, but this Mac is ${process.arch}. In home/.pi, allow glimpseui's install script and run npm rebuild glimpseui (needs swiftc).`,
       };
@@ -67,7 +72,7 @@ function loadGlimpse(): { glimpse: GlimpseModule } | { reason: string } {
 type GlimpseWindow = {
   setHTML: (html: string) => void;
   show: (options?: { title?: string }) => void;
-  on: (event: "closed", listener: () => void) => void;
+  on: (event: 'closed', listener: () => void) => void;
 };
 
 const html = `<!doctype html>
@@ -130,33 +135,33 @@ const html = `<!doctype html>
 let window: GlimpseWindow | undefined;
 
 export default function (pi: ExtensionAPI) {
-  pi.registerCommand("review", {
-    description: "Show hello world in a Glimpse window",
+  pi.registerCommand('review', {
+    description: 'Show hello world in a Glimpse window',
     handler: async (_args, ctx) => {
       const loaded = loadGlimpse();
-      if ("reason" in loaded) {
-        ctx.ui.notify(loaded.reason, "error");
+      if ('reason' in loaded) {
+        ctx.ui.notify(loaded.reason, 'error');
         return;
       }
 
       if (window) {
         window.setHTML(html);
-        window.show({ title: "review" });
+        window.show({ title: 'review' });
         return;
       }
 
       try {
-        window = loaded.glimpse.open(html, { width: 420, height: 240, title: "review" });
+        window = loaded.glimpse.open(html, { width: 420, height: 240, title: 'review' });
       } catch (error) {
-        ctx.ui.notify(error instanceof Error ? error.message : "Could not open Glimpse.", "error");
+        ctx.ui.notify(error instanceof Error ? error.message : 'Could not open Glimpse.', 'error');
         return;
       }
 
-      window.on("error", (error: Error) => {
+      window.on('error', (error: Error) => {
         window = undefined;
-        ctx.ui.notify(error.message, "error");
+        ctx.ui.notify(error.message, 'error');
       });
-      window.on("closed", () => {
+      window.on('closed', () => {
         window = undefined;
       });
     },

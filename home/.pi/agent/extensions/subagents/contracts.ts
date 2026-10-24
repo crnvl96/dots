@@ -53,8 +53,16 @@ export function active(job: Job) {
 
 export function lastAssistantText(messages: readonly AgentMessage[]) {
   const last = [...messages].reverse().find((message) => message.role === 'assistant');
-  if (last?.role !== 'assistant') return { text: '', error: 'Subagent finished without an assistant response.', stopReason: undefined as string | undefined };
-  const text = last.content.filter((part) => part.type === 'text').map((part) => part.text).join('\n');
+  if (last?.role !== 'assistant')
+    return {
+      text: '',
+      error: 'Subagent finished without an assistant response.',
+      stopReason: undefined as string | undefined,
+    };
+  const text = last.content
+    .filter((part) => part.type === 'text')
+    .map((part) => part.text)
+    .join('\n');
   const failed = last.stopReason === 'error' || last.stopReason === 'aborted';
   return {
     text,

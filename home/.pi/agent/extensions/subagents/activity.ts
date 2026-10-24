@@ -5,32 +5,44 @@ import { oneLine } from './formatting.ts';
 
 /** Summarize known tools without inspecting output or private reasoning. */
 export function toolActivity(name: string, args: unknown) {
-  const input = args && typeof args === 'object' ? args as Record<string, unknown> : {};
-  const field = (key: string) => typeof input[key] === 'string' ? oneLine(input[key]) : '';
+  const input = args && typeof args === 'object' ? (args as Record<string, unknown>) : {};
+  const field = (key: string) => (typeof input[key] === 'string' ? oneLine(input[key]) : '');
   const path = field('path') || field('file_path');
   const command = name === 'bash' ? field('command') : '';
   switch (name) {
-    case 'read': return path ? `Reading ${path}` : 'Reading a file';
-    case 'edit': return path ? `Editing ${path}` : 'Editing a file';
-    case 'write': return path ? `Writing ${path}` : 'Writing a file';
-    case 'bash': return command ? `Running ${command}` : 'Running a command';
-    case 'grep': return `Searching ${field('pattern') || 'files'}${path ? ` in ${path}` : ''}`;
-    case 'find': return `Finding ${field('pattern') || 'files'}${path ? ` in ${path}` : ''}`;
-    case 'ls': return `Listing ${path || '.'}`;
-    case 'codemode': return 'Running code · tool orchestration';
-    case 'subagents_ask': return input.kind === 'decision' ? 'Needs a decision' : 'Found a gap';
-    default: return `Using ${oneLine(truncateToWidth(oneLine(name), 80))}`;
+    case 'read':
+      return path ? `Reading ${path}` : 'Reading a file';
+    case 'edit':
+      return path ? `Editing ${path}` : 'Editing a file';
+    case 'write':
+      return path ? `Writing ${path}` : 'Writing a file';
+    case 'bash':
+      return command ? `Running ${command}` : 'Running a command';
+    case 'grep':
+      return `Searching ${field('pattern') || 'files'}${path ? ` in ${path}` : ''}`;
+    case 'find':
+      return `Finding ${field('pattern') || 'files'}${path ? ` in ${path}` : ''}`;
+    case 'ls':
+      return `Listing ${path || '.'}`;
+    case 'codemode':
+      return 'Running code · tool orchestration';
+    case 'subagents_ask':
+      return input.kind === 'decision' ? 'Needs a decision' : 'Found a gap';
+    default:
+      return `Using ${oneLine(truncateToWidth(oneLine(name), 80))}`;
   }
 }
 
 /** Update only on meaningful transitions so bookkeeping events cannot erase useful activity. */
 export function updateActivity(job: Job, event: AgentSessionEvent) {
-  if (event.type === 'tool_execution_start') job.tools.set(event.toolCallId, toolActivity(event.toolName, event.args));
+  if (event.type === 'tool_execution_start')
+    job.tools.set(event.toolCallId, toolActivity(event.toolName, event.args));
   if (event.type === 'tool_execution_end') job.tools.delete(event.toolCallId);
   if (job.status !== 'running') return;
   if (job.tools.size) {
     const tools = [...job.tools.values()];
-    job.activity = tools.slice(-2).join(' · ') + (tools.length > 2 ? ` · +${tools.length - 2} more` : '');
+    job.activity =
+      tools.slice(-2).join(' · ') + (tools.length > 2 ? ` · +${tools.length - 2} more` : '');
     return;
   }
   switch (event.type) {
@@ -54,7 +66,11 @@ export function updateActivity(job: Job, event: AgentSessionEvent) {
       job.activity = 'Compacting context';
       break;
     case 'compaction_end':
-      job.activity = event.errorMessage ? 'Context compaction failed' : event.aborted ? 'Context compaction cancelled' : 'Waiting for model';
+      job.activity = event.errorMessage
+        ? 'Context compaction failed'
+        : event.aborted
+          ? 'Context compaction cancelled'
+          : 'Waiting for model';
       break;
   }
 }

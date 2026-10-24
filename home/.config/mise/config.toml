@@ -25,6 +25,9 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:oxlint" = "latest"
 "npm:typescript" = "latest"
 
+[bootstrap.mise_shell_activate]
+zsh = true
+
 [bootstrap.packages]
 "brew:bat" = "latest"
 "brew:eza" = "latest"

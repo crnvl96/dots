@@ -59,23 +59,44 @@ test('a dedicated pi process inherits tools, writes a file, and asks the parent'
   const provider = join(directory, 'fake-provider.ts');
   await writeFile(provider, providerSource);
   t.after(() => rm(directory, { recursive: true, force: true }));
-  const child = spawn('pi', [
-    '--mode', 'rpc', '--no-session', '--no-extensions', '--no-skills', '--no-context-files', '--thinking', 'off',
-    '--provider', 'fake', '--model', 'scripted',
-    '-e', extensionDir, '-e', provider,
-  ], {
-    cwd: directory,
-    env: { ...process.env, PI_CODING_AGENT_DIR: directory, PI_OFFLINE: '1' },
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
+  const child = spawn(
+    'pi',
+    [
+      '--mode',
+      'rpc',
+      '--no-session',
+      '--no-extensions',
+      '--no-skills',
+      '--no-context-files',
+      '--thinking',
+      'off',
+      '--provider',
+      'fake',
+      '--model',
+      'scripted',
+      '-e',
+      extensionDir,
+      '-e',
+      provider,
+    ],
+    {
+      cwd: directory,
+      env: { ...process.env, PI_CODING_AGENT_DIR: directory, PI_OFFLINE: '1' },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    },
+  );
   let stderr = '';
   child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr += chunk; });
+  child.stderr.on('data', (chunk) => {
+    stderr += chunk;
+  });
   const lines = [];
   let buffer = '';
   const ready = new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
-      reject(new Error(`pi process timed out\nstderr=${stderr}\nlines=${lines.slice(-6).join('\n')}`));
+      reject(
+        new Error(`pi process timed out\nstderr=${stderr}\nlines=${lines.slice(-6).join('\n')}`),
+      );
     }, 30_000);
     child.on('exit', (code) => {
       clearTimeout(timer);
@@ -90,7 +111,9 @@ test('a dedicated pi process inherits tools, writes a file, and asks the parent'
         if (!part.trim()) continue;
         lines.push(part);
         const asked = lines.some((line) => line.includes('Should I keep the filename marker.txt'));
-        const answered = lines.some((line) => line.includes('I need a user decision about marker.txt'));
+        const answered = lines.some((line) =>
+          line.includes('I need a user decision about marker.txt'),
+        );
         if (asked && answered) {
           clearTimeout(timer);
           resolve(part);
@@ -98,10 +121,13 @@ test('a dedicated pi process inherits tools, writes a file, and asks the parent'
       }
     });
   });
-  child.stdin.write(JSON.stringify({
-    id: '1', type: 'prompt',
-    message: 'Orchestrate check-files. Launch one subagent and wait for its decision request.',
-  }) + '\n');
+  child.stdin.write(
+    JSON.stringify({
+      id: '1',
+      type: 'prompt',
+      message: 'Orchestrate check-files. Launch one subagent and wait for its decision request.',
+    }) + '\n',
+  );
   try {
     await ready;
   } finally {

@@ -6,14 +6,34 @@ function job() {
   return { status: 'running', activity: 'Starting', tools: new Map() };
 }
 
-const start = (id, name, args = {}) => ({ type: 'tool_execution_start', toolCallId: id, toolName: name, args });
-const end = (id) => ({ type: 'tool_execution_end', toolCallId: id, toolName: '', result: {}, isError: false, durationMs: 1 });
-const message = (type) => ({ type: 'message_update', assistantMessageEvent: { type }, message: {} });
+const start = (id, name, args = {}) => ({
+  type: 'tool_execution_start',
+  toolCallId: id,
+  toolName: name,
+  args,
+});
+const end = (id) => ({
+  type: 'tool_execution_end',
+  toolCallId: id,
+  toolName: '',
+  result: {},
+  isError: false,
+  durationMs: 1,
+});
+const message = (type) => ({
+  type: 'message_update',
+  assistantMessageEvent: { type },
+  message: {},
+});
 
 test('known tools describe files, commands and searches rather than arbitrary input payloads', () => {
   const cases = [
     ['read', { path: 'src/parser.ts' }, 'Reading src/parser.ts'],
-    ['edit', { file_path: 'src/parser.ts', oldText: 'SECRET', newText: 'SECRET' }, 'Editing src/parser.ts'],
+    [
+      'edit',
+      { file_path: 'src/parser.ts', oldText: 'SECRET', newText: 'SECRET' },
+      'Editing src/parser.ts',
+    ],
     ['write', { path: 'report.md', content: 'SECRET' }, 'Writing report.md'],
     ['bash', { command: 'npm test', timeout: 30 }, 'Running npm test'],
     ['grep', { pattern: 'renderWidget', path: 'src' }, 'Searching renderWidget in src'],
@@ -30,7 +50,9 @@ test('known tools describe files, commands and searches rather than arbitrary in
 });
 
 test('tool labels sanitize terminal sequences and keep full input for automatic detail expansion', () => {
-  const label = toolActivity('bash', { command: '\x1b[31mnpm test\x1b[0m\n--watch\t' + '界'.repeat(200) });
+  const label = toolActivity('bash', {
+    command: '\x1b[31mnpm test\x1b[0m\n--watch\t' + '界'.repeat(200),
+  });
   assert.ok(!/[\x00-\x1f\x7f]/.test(label));
   assert.ok(label.endsWith('界'.repeat(200)));
   assert.match(label, /^Running npm test --watch/);
@@ -40,10 +62,18 @@ test('tool labels sanitize terminal sequences and keep full input for automatic 
 test('tool activity follows concurrent and nested calls without retaining output or finished history', () => {
   const item = job();
   updateActivity(item, start('orchestrator', 'codemode'));
-  updateActivity(item, { ...start('read', 'read', { path: 'src/a.ts' }), parentToolCallId: 'orchestrator' });
+  updateActivity(item, {
+    ...start('read', 'read', { path: 'src/a.ts' }),
+    parentToolCallId: 'orchestrator',
+  });
   updateActivity(item, start('tests', 'bash', { command: 'npm test' }));
   assert.equal(item.activity, 'Reading src/a.ts · Running npm test · +1 more');
-  updateActivity(item, { type: 'tool_execution_update', toolCallId: 'tests', toolName: 'bash', partialResult: { content: 'SECRET' } });
+  updateActivity(item, {
+    type: 'tool_execution_update',
+    toolCallId: 'tests',
+    toolName: 'bash',
+    partialResult: { content: 'SECRET' },
+  });
   assert.doesNotMatch(item.activity, /SECRET/);
   updateActivity(item, end('read'));
   assert.equal(item.activity, 'Running code · tool orchestration · Running npm test');
@@ -72,13 +102,25 @@ test('thinking and response writing survive unrelated bookkeeping without exposi
 
 test('retry and compaction events explain recovery instead of showing generic work', () => {
   const item = job();
-  updateActivity(item, { type: 'auto_retry_start', attempt: 2, maxAttempts: 3, delayMs: 1500, errorMessage: 'SECRET' });
+  updateActivity(item, {
+    type: 'auto_retry_start',
+    attempt: 2,
+    maxAttempts: 3,
+    delayMs: 1500,
+    errorMessage: 'SECRET',
+  });
   assert.equal(item.activity, 'Retrying · attempt 2/3 · backoff 2s');
   updateActivity(item, { type: 'queue_update', steering: [], followUp: [] });
   assert.match(item.activity, /^Retrying/);
   updateActivity(item, { type: 'compaction_start', reason: 'threshold' });
   assert.equal(item.activity, 'Compacting context');
-  updateActivity(item, { type: 'compaction_end', reason: 'threshold', errorMessage: 'SECRET', aborted: false, willRetry: false });
+  updateActivity(item, {
+    type: 'compaction_end',
+    reason: 'threshold',
+    errorMessage: 'SECRET',
+    aborted: false,
+    willRetry: false,
+  });
   assert.equal(item.activity, 'Context compaction failed');
   updateActivity(item, { type: 'turn_start' });
   assert.equal(item.activity, 'Waiting for model');

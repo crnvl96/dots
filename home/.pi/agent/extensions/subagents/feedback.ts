@@ -11,16 +11,22 @@ export function feedbackMessage(feedback: Feedback) {
 }
 
 export function deliverFeedback(pi: ExtensionAPI, feedback: Feedback) {
-  pi.sendMessage({
-    customType: config.widgetId,
-    display: true,
-    content: feedbackMessage(feedback),
-    details: { id: feedback.id, kind: feedback.kind, message: feedback.message, feedback: true },
-  }, { triggerTurn: true, deliverAs: 'steer' });
+  pi.sendMessage(
+    {
+      customType: config.widgetId,
+      display: true,
+      content: feedbackMessage(feedback),
+      details: { id: feedback.id, kind: feedback.kind, message: feedback.message, feedback: true },
+    },
+    { triggerTurn: true, deliverAs: 'steer' },
+  );
 }
 
 const AskSchema = Type.Object({
-  message: Type.String({ minLength: 1, description: 'The gap or the decision you need, including the options if you have them.' }),
+  message: Type.String({
+    minLength: 1,
+    description: 'The gap or the decision you need, including the options if you have them.',
+  }),
   kind: Type.Optional(StringEnum(['gap', 'decision'] as const)),
 });
 
@@ -40,7 +46,12 @@ export function askTool(onAsk: (feedback: Feedback) => void): ToolDefinition<typ
       const kind: FeedbackKind = params.kind === 'decision' ? 'decision' : 'gap';
       onAsk({ id: '', kind, message });
       return {
-        content: [{ type: 'text', text: 'Parent notified. If blocked, return your findings and stop. This finishes your task; the parent can launch a fresh task with the answer.' }],
+        content: [
+          {
+            type: 'text',
+            text: 'Parent notified. If blocked, return your findings and stop. This finishes your task; the parent can launch a fresh task with the answer.',
+          },
+        ],
         details: { delivered: true, kind },
       };
     },

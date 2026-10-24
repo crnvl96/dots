@@ -37,9 +37,13 @@ export class SubagentMenu implements Component {
 
 export function bindMenu(runtime: Runtime) {
   runtime.setAttachUI((ctx) => {
-    ctx.ui.setWidget(config.widgetId, (tui) => new SubagentMenu(tui, ctx, {
-      jobs: () => [...runtime.jobs.values()],
-      subscribe: runtime.subscribe,
-    }));
+    ctx.ui.setWidget(
+      config.widgetId,
+      (tui) =>
+        new SubagentMenu(tui, ctx, {
+          jobs: () => [...runtime.jobs.values()],
+          subscribe: runtime.subscribe,
+        }),
+    );
   });
 }

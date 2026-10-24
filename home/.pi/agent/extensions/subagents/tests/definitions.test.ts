@@ -17,10 +17,11 @@ function fixture(t) {
     writeFileSync(path, content);
     return path;
   };
-  const agent = (base, convention, file, name, body = 'Review the code.', extra = '') => write(
-    join(base, convention, 'agents', file),
-    `---\nname: ${name}\ndescription: Review code carefully\n${extra}---\n${body}\n`,
-  );
+  const agent = (base, convention, file, name, body = 'Review the code.', extra = '') =>
+    write(
+      join(base, convention, 'agents', file),
+      `---\nname: ${name}\ndescription: Review code carefully\n${extra}---\n${body}\n`,
+    );
   const discover = (options = {}) => discoverAgents({ cwd, homeDir, ...options });
   return { root, homeDir, cwd, write, agent, discover };
 }
@@ -33,9 +34,15 @@ test('missing roots are silent and discovery is fresh after additions, edits, an
   f.agent(f.homeDir, '.agents', 'review.md', 'review', 'Edited instructions.');
   assert.equal(f.discover().agents[0].body, 'Edited instructions.');
   f.agent(f.homeDir, '.agents', 'new.md', 'new-agent');
-  assert.deepEqual(f.discover().agents.map(agent => agent.name), ['new-agent', 'review']);
+  assert.deepEqual(
+    f.discover().agents.map((agent) => agent.name),
+    ['new-agent', 'review'],
+  );
   rmSync(path);
-  assert.deepEqual(f.discover().agents.map(agent => agent.name), ['new-agent']);
+  assert.deepEqual(
+    f.discover().agents.map((agent) => agent.name),
+    ['new-agent'],
+  );
 });
 
 test('recursively discovers .agents roots, ignores non-Markdown, sorts by agent name', (t) => {
@@ -45,9 +52,14 @@ test('recursively discovers .agents roots, ignores non-Markdown, sorts by agent 
   f.agent(f.cwd, '.agents', 'nested/b.md', 'beta');
   f.agent(f.cwd, '.agents', 'not-markdown.txt', 'ignored');
   const catalog = f.discover();
-  assert.deepEqual(catalog.agents.map(agent => [agent.name, agent.source]), [
-    ['alpha', 'user'], ['beta', 'project'], ['zeta', 'user'],
-  ]);
+  assert.deepEqual(
+    catalog.agents.map((agent) => [agent.name, agent.source]),
+    [
+      ['alpha', 'user'],
+      ['beta', 'project'],
+      ['zeta', 'user'],
+    ],
+  );
   assert.deepEqual(catalog.diagnostics, []);
 });
 
@@ -63,7 +75,10 @@ test('nearest project beats ancestors, which beat user definitions', (t) => {
   f.agent(child, '.agents', 'review.md', 'review', 'nearest definition');
   assert.equal(f.discover({ cwd: child }).agents[0].body, 'nearest definition');
   f.agent(f.root, '.agents', 'outside.md', 'outside');
-  assert.deepEqual(f.discover({ cwd: child }).agents.map(agent => agent.name), ['review']);
+  assert.deepEqual(
+    f.discover({ cwd: child }).agents.map((agent) => agent.name),
+    ['review'],
+  );
   assert.deepEqual(f.discover({ cwd: child }).diagnostics, []);
 });
 
@@ -81,9 +96,10 @@ test('.claude roots are ignored at user, ancestor project, and nearest project l
   assert.deepEqual(f.discover({ cwd: child }), { agents: [], diagnostics: [] });
   f.agent(f.homeDir, '.agents', 'review.md', 'review', 'Only .agents instructions.');
   const result = f.discover({ cwd: child });
-  assert.deepEqual(result.agents.map(agent => [agent.name, agent.body, agent.source]), [
-    ['review', 'Only .agents instructions.', 'user'],
-  ]);
+  assert.deepEqual(
+    result.agents.map((agent) => [agent.name, agent.body, agent.source]),
+    [['review', 'Only .agents instructions.', 'user']],
+  );
   assert.deepEqual(result.diagnostics, []);
 });
 
@@ -93,9 +109,15 @@ test('worktree .git files define the boundary and non-git projects scan only cwd
   mkdirSync(child);
   f.agent(f.cwd, '.agents', 'ancestor.md', 'ancestor');
   f.agent(child, '.agents', 'local.md', 'local');
-  assert.deepEqual(f.discover({ cwd: child }).agents.map(agent => agent.name), ['local']);
+  assert.deepEqual(
+    f.discover({ cwd: child }).agents.map((agent) => agent.name),
+    ['local'],
+  );
   f.write(join(f.cwd, '.git'), 'gitdir: /some/worktree');
-  assert.deepEqual(f.discover({ cwd: child }).agents.map(agent => agent.name), ['ancestor', 'local']);
+  assert.deepEqual(
+    f.discover({ cwd: child }).agents.map((agent) => agent.name),
+    ['ancestor', 'local'],
+  );
 });
 
 test('untrusted project directories are not scanned, including their invalid definitions', (t) => {
@@ -103,14 +125,20 @@ test('untrusted project directories are not scanned, including their invalid def
   f.agent(f.homeDir, '.agents', 'user.md', 'user');
   f.agent(f.cwd, '.agents', 'project.md', 'project');
   f.write(join(f.cwd, '.agents', 'agents', 'invalid.md'), 'invalid');
-  assert.deepEqual(f.discover({ projectTrusted: false }).agents.map(agent => agent.name), ['user']);
+  assert.deepEqual(
+    f.discover({ projectTrusted: false }).agents.map((agent) => agent.name),
+    ['user'],
+  );
   assert.deepEqual(f.discover({ projectTrusted: false }).diagnostics, []);
 });
 
 test('symlink directories and files are followed, loops terminate, aliases deduplicate', (t) => {
   const f = fixture(t);
   const external = join(f.root, 'external');
-  const target = f.write(join(external, 'nested', 'review.md'), '---\nname: review\ndescription: Review\n---\nRead ./guide.md.');
+  const target = f.write(
+    join(external, 'nested', 'review.md'),
+    '---\nname: review\ndescription: Review\n---\nRead ./guide.md.',
+  );
   const agents = join(f.homeDir, '.agents', 'agents');
   mkdirSync(agents, { recursive: true });
   symlinkSync(external, join(agents, 'directory'));
@@ -163,11 +191,23 @@ test('duplicates at equal priority diagnose and choose deterministic lexical pat
 for (const [label, content, diagnostic] of [
   ['missing opening delimiter', 'name: review\ndescription: Review\n---\nBody', /first-line/],
   ['leading blank line', '\n---\nname: review\ndescription: Review\n---\nBody', /first-line/],
-  ['opening delimiter prefix', '---yaml\nname: review\ndescription: Review\n---\nBody', /first-line/],
+  [
+    'opening delimiter prefix',
+    '---yaml\nname: review\ndescription: Review\n---\nBody',
+    /first-line/,
+  ],
   ['missing closing delimiter', '---\nname: review\ndescription: Review\nBody', /closing/],
-  ['closing delimiter prefix', '---\nname: review\ndescription: Review\n---oops\nBody\n---', /delimiter/],
+  [
+    'closing delimiter prefix',
+    '---\nname: review\ndescription: Review\n---oops\nBody\n---',
+    /delimiter/,
+  ],
   ['invalid YAML', '---\nname: [broken\ndescription: Review\n---\nBody', /YAML|flow|sequence/i],
-  ['duplicate YAML keys', '---\nname: review\nname: other\ndescription: Review\n---\nBody', /unique|duplicate/i],
+  [
+    'duplicate YAML keys',
+    '---\nname: review\nname: other\ndescription: Review\n---\nBody',
+    /unique|duplicate/i,
+  ],
   ['list frontmatter', '---\n- name: review\n---\nBody', /mapping/],
   ['scalar frontmatter', '---\nhello\n---\nBody', /mapping/],
   ['missing name', '---\ndescription: Review\n---\nBody', /name/],
@@ -178,11 +218,31 @@ for (const [label, content, diagnostic] of [
   ['blank description', '---\nname: review\ndescription: "  "\n---\nBody', /description/],
   ['non-string description', '---\nname: review\ndescription: [Review]\n---\nBody', /description/],
   ['empty body', '---\nname: review\ndescription: Review\n---\n \n', /body/],
-  ['unknown permission field', '---\nname: review\ndescription: Review\npermissionMode: bypassPermissions\n---\nBody', /Unsupported.*permissionMode/],
-  ['tools field', '---\nname: review\ndescription: Review\ntools: Read\n---\nBody', /Unsupported.*tools/],
-  ['unknown extra field', '---\nname: review\ndescription: Review\ncolor: blue\n---\nBody', /Unsupported.*color/],
-  ['model override', '---\nname: review\ndescription: Review\nmodel: opus\n---\nBody', /only model: inherit/],
-  ['null model', '---\nname: review\ndescription: Review\nmodel: null\n---\nBody', /only model: inherit/],
+  [
+    'unknown permission field',
+    '---\nname: review\ndescription: Review\npermissionMode: bypassPermissions\n---\nBody',
+    /Unsupported.*permissionMode/,
+  ],
+  [
+    'tools field',
+    '---\nname: review\ndescription: Review\ntools: Read\n---\nBody',
+    /Unsupported.*tools/,
+  ],
+  [
+    'unknown extra field',
+    '---\nname: review\ndescription: Review\ncolor: blue\n---\nBody',
+    /Unsupported.*color/,
+  ],
+  [
+    'model override',
+    '---\nname: review\ndescription: Review\nmodel: opus\n---\nBody',
+    /only model: inherit/,
+  ],
+  [
+    'null model',
+    '---\nname: review\ndescription: Review\nmodel: null\n---\nBody',
+    /only model: inherit/,
+  ],
   ['oversized file', 'x'.repeat(128 * 1024 + 1), /128 KiB/],
 ]) {
   test(`invalid definitions fail closed: ${label}`, (t) => {
@@ -230,13 +290,19 @@ test('unidentifiable definitions diagnose the limitation rather than guessing a 
   f.write(join(f.cwd, '.agents', 'agents', 'review.md'), '---\nname: [bad yaml\n---\nBody');
   const result = f.discover();
   assert.equal(result.agents[0].name, 'review');
-  assert.match(result.diagnostics[0], /could not determine a valid agent name.*lower-priority definition may still be available/);
+  assert.match(
+    result.diagnostics[0],
+    /could not determine a valid agent name.*lower-priority definition may still be available/,
+  );
 });
 
 test('YAML multiline description, quoted strings, CRLF, and 64-character names are supported', (t) => {
   const f = fixture(t);
   const name = 'a'.repeat(64);
-  f.write(join(f.homeDir, '.agents', 'agents', 'valid.md'), `---\r\nname: "${name}"\r\ndescription: >-\r\n  Review carefully\r\n  and report.\r\nmodel: inherit\r\n---\r\nRead ./guide.md.\r\n`);
+  f.write(
+    join(f.homeDir, '.agents', 'agents', 'valid.md'),
+    `---\r\nname: "${name}"\r\ndescription: >-\r\n  Review carefully\r\n  and report.\r\nmodel: inherit\r\n---\r\nRead ./guide.md.\r\n`,
+  );
   const result = f.discover();
   assert.deepEqual(result.diagnostics, []);
   assert.equal(result.agents[0].name, name);
@@ -252,13 +318,19 @@ test('I/O failures diagnose dangling symlinks and non-directory roots without th
   const result = f.discover();
   assert.deepEqual(result.agents, []);
   assert.equal(result.diagnostics.length, 2);
-  assert.ok(result.diagnostics.some(message => /ENOENT/.test(message)));
-  assert.ok(result.diagnostics.some(message => /not a directory/.test(message)));
+  assert.ok(result.diagnostics.some((message) => /ENOENT/.test(message)));
+  assert.ok(result.diagnostics.some((message) => /not a directory/.test(message)));
 });
 
 test('definitionPrompt preserves body and specifies absolute source and relative-reference base', (t) => {
   const f = fixture(t);
-  const path = f.agent(f.homeDir, '.agents', 'nested/review.md', 'review', 'Read ./guide.md.\nThen inspect ../src.');
+  const path = f.agent(
+    f.homeDir,
+    '.agents',
+    'nested/review.md',
+    'review',
+    'Read ./guide.md.\nThen inspect ../src.',
+  );
   const definition = f.discover().agents[0];
   const prompt = definitionPrompt(definition);
   assert.ok(prompt.includes(realpathSync(path)));

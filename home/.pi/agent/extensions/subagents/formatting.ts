@@ -7,17 +7,28 @@ import type { Job, Snapshot } from './contracts.ts';
 
 export function snapshot(job: Job, includeResult = false): Snapshot {
   return {
-    id: job.id, prompt: job.prompt, model: job.model, provider: job.provider,
+    id: job.id,
+    prompt: job.prompt,
+    model: job.model,
+    provider: job.provider,
     ...(job.agentType ? { agentType: job.agentType, agentFile: job.agentFile } : {}),
-    status: job.status, activity: job.activity, pendingSteers: job.pendingSteers,
+    status: job.status,
+    activity: job.activity,
+    pendingSteers: job.pendingSteers,
     elapsedMs: Math.max(0, (job.finishedAt ?? Date.now()) - job.startedAt),
-    notification: job.notification, error: job.error ?? null, notificationError: job.notificationError ?? null,
-    result: includeResult ? job.result ?? null : null, fullOutputPath: job.fullOutputPath ?? null,
+    notification: job.notification,
+    error: job.error ?? null,
+    notificationError: job.notificationError ?? null,
+    result: includeResult ? (job.result ?? null) : null,
+    fullOutputPath: job.fullOutputPath ?? null,
   };
 }
 
 export function oneLine(text: string) {
-  return stripTerminalSequences(text).replace(/[\x00-\x1f\x7f-\x9f]/g, ' ').replace(/\s+/g, ' ').trim();
+  return stripTerminalSequences(text)
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 export function elapsed(job: Job) {
@@ -29,7 +40,8 @@ export async function boundedReport(job: Job, response: string, error?: string) 
   const full = `Subagent ${job.id} ${job.status}.\nTask: ${truncateToWidth(oneLine(job.prompt), 160)}\n\n${job.status === 'stopped' ? 'Stopped by user.\n\n' : error ? `Error: ${error}\n\n` : ''}${response || '(No text response.)'}`;
   const truncated = truncateHead(full);
   let content = truncated.content;
-  job.result = content + (truncated.truncated ? '\n\n[Output truncated; preparing full response file.]' : '');
+  job.result =
+    content + (truncated.truncated ? '\n\n[Output truncated; preparing full response file.]' : '');
   let fullOutputPath: string | undefined;
   if (truncated.truncated) {
     try {

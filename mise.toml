@@ -1,9 +1,53 @@
 [dotfiles."~"]
 source = "home"
 mode = "symlink-each"
+manifest = "git"
 relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
+
+[tasks.apply]
+description = "Apply the dotfiles with mise"
+dir = "{{ config_root }}"
+run = "mise dotfiles apply"
+
+[tasks.setup]
+description = "Set up the machine from the repo's mise config"
+dir = "{{ config_root }}"
+env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
+raw = true
+run = "mise bootstrap"
+
+[tasks.preview]
+description = "Preview the machine setup without applying it"
+dir = "{{ config_root }}"
+env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
+run = "mise bootstrap --dry-run"
+
+[tasks.status]
+description = "Show the state of the configured machine setup"
+dir = "{{ config_root }}"
+env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
+run = "mise bootstrap status"
+
+[tasks.diff]
+description = "Show the changes applying dotfiles would make"
+dir = "{{ config_root }}"
+env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
+run = "mise dotfiles diff"
+
+[tasks."install:pi"]
+description = "Install Pi dependencies from the npm lockfile"
+dir = "{{ config_root }}/home/.pi"
+raw = true
+run = "npm ci"
+
+[tasks."restart:macos"]
+description = "Restart Dock, Finder, and the menu bar to reload preferences"
+dir = "{{ config_root }}"
+confirm = { message = "Restart Dock, Finder, and the menu bar?", default = "no" }
+raw = true
+run = "killall Dock Finder SystemUIServer"
 
 [tasks.format]
 description = "Format the Neovim and Pi"

@@ -7,25 +7,50 @@ const plainTheme = { fg: (_color, text) => text, bold: (text) => text };
 
 function harness(t, count = 2) {
   const jobs = Array.from({ length: count }, (_, index) => ({
-    id: `task-${index + 1}`, status: 'running', activity: 'Thinking', startedAt: Date.now(),
+    id: `task-${index + 1}`,
+    status: 'running',
+    activity: 'Thinking',
+    startedAt: Date.now(),
     prompt: 'Private assignment',
   }));
   const observers = new Set();
   let renders = 0;
-  const tui = { terminal: { rows: 32, columns: 100 }, requestRender() { renders++; } };
-  const ctx = { ui: {
-    theme: plainTheme,
-    onTerminalInput() { assert.fail('A read-only widget must never subscribe to input'); },
-  } };
-  const refresh = () => { for (const observer of observers) observer(); };
+  const tui = {
+    terminal: { rows: 32, columns: 100 },
+    requestRender() {
+      renders++;
+    },
+  };
+  const ctx = {
+    ui: {
+      theme: plainTheme,
+      onTerminalInput() {
+        assert.fail('A read-only widget must never subscribe to input');
+      },
+    },
+  };
+  const refresh = () => {
+    for (const observer of observers) observer();
+  };
   const menu = new SubagentMenu(tui, ctx, {
     jobs: () => jobs,
-    subscribe(listener) { observers.add(listener); return () => observers.delete(listener); },
+    subscribe(listener) {
+      observers.add(listener);
+      return () => observers.delete(listener);
+    },
   });
   t.after(() => menu.dispose());
-  return { jobs, menu, ctx, tui, observers, refresh,
+  return {
+    jobs,
+    menu,
+    ctx,
+    tui,
+    observers,
+    refresh,
     screen: (width = 100) => menu.render(width).join('\n'),
-    get renders() { return renders; },
+    get renders() {
+      return renders;
+    },
   };
 }
 
@@ -35,8 +60,14 @@ test('read-only widget has no input, mouse or selection controls', (t) => {
   assert.match(h.screen(), /task-2/);
   assert.equal(h.menu.handleInput, undefined);
   assert.equal(h.menu.handleMouse, undefined);
-  assert.doesNotMatch(h.screen(), /Ctrl\+X|↑|↓|select|›|AGENT|STATUS|DOING NOW|TIME|│|Private assignment/);
-  assert.deepEqual(h.jobs.map(job => job.status), ['running', 'running']);
+  assert.doesNotMatch(
+    h.screen(),
+    /Ctrl\+X|↑|↓|select|›|AGENT|STATUS|DOING NOW|TIME|│|Private assignment/,
+  );
+  assert.deepEqual(
+    h.jobs.map((job) => job.status),
+    ['running', 'running'],
+  );
 });
 
 test('completion updates visible rows and an empty widget hides automatically', (t) => {
@@ -65,7 +96,8 @@ test('overflow is explicit without navigation and newly available rows reveal hi
 
 test('long activity automatically expands beneath its row without selection', (t) => {
   const h = harness(t, 1);
-  h.jobs[0].activity = 'Running npm test -- --runInBand --testPathPattern=extensions/subagents/tests/runtime.test.ts';
+  h.jobs[0].activity =
+    'Running npm test -- --runInBand --testPathPattern=extensions/subagents/tests/runtime.test.ts';
   const screen = h.screen(80);
   assert.match(screen, /↳ Running npm test/);
   assert.match(screen, /runtime.test.ts/);

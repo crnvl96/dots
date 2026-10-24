@@ -12,13 +12,33 @@ import test from 'node:test';
 import { Type } from 'typebox';
 import { createAssistantMessageEventStream } from '@earendil-works/pi-ai';
 import { Agent } from '@earendil-works/pi-agent-core';
-import { AgentSession, CustomEditor, DefaultResourceLoader, SettingsManager, initTheme } from '@earendil-works/pi-coding-agent';
-import { KeybindingsManager, TUI_KEYBINDINGS, TuiAltScreen, TuiMainScreen, Text, stripTerminalSequences, visibleWidth } from '@earendil-works/pi-tui';
+import {
+  AgentSession,
+  CustomEditor,
+  DefaultResourceLoader,
+  SettingsManager,
+  initTheme,
+} from '@earendil-works/pi-coding-agent';
+import {
+  KeybindingsManager,
+  TUI_KEYBINDINGS,
+  TuiAltScreen,
+  TuiMainScreen,
+  Text,
+  stripTerminalSequences,
+  visibleWidth,
+} from '@earendil-works/pi-tui';
 import extension from '../index.ts';
 
 const parentModel = {
-  id: 'parent-model', provider: 'parent-provider', api: 'openai-completions',
-  name: 'Parent', reasoning: true, input: ['text'], contextWindow: 100_000, maxTokens: 8192,
+  id: 'parent-model',
+  provider: 'parent-provider',
+  api: 'openai-completions',
+  name: 'Parent',
+  reasoning: true,
+  input: ['text'],
+  contextWindow: 100_000,
+  maxTokens: 8192,
   cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 };
 const childModel = { ...parentModel, id: 'child-model', provider: 'child-provider' };
@@ -45,8 +65,18 @@ function harness(t, mode = 'print', renderer) {
   const notices = [];
   const theme = { fg: (_color, text) => text, bg: (_color, text) => text, bold: (text) => text };
   let renders = 0;
-  const tui = renderer ?? { terminal: { rows: 32, columns: 100 }, requestRender() { renders++; },
-    getFocusedComponent() { return undefined; }, hasOverlay() { return false; } };
+  const tui = renderer ?? {
+    terminal: { rows: 32, columns: 100 },
+    requestRender() {
+      renders++;
+    },
+    getFocusedComponent() {
+      return undefined;
+    },
+    hasOverlay() {
+      return false;
+    },
+  };
   const ui = {
     theme,
     setWidget(name, factory) {
@@ -54,9 +84,15 @@ function harness(t, mode = 'print', renderer) {
       if (factory) widgets.set(name, factory(tui, theme));
       else widgets.delete(name);
     },
-    notify(text, level) { notices.push({ text, level }); },
-    custom() { assert.fail('The inline menu must never open a dialog'); },
-    getEditorText() { return ''; },
+    notify(text, level) {
+      notices.push({ text, level });
+    },
+    custom() {
+      assert.fail('The inline menu must never open a dialog');
+    },
+    getEditorText() {
+      return '';
+    },
     onTerminalInput(listener) {
       inputListeners.add(listener);
       const unsubscribe = renderer?.addInputListener(listener);
@@ -70,47 +106,95 @@ function harness(t, mode = 'print', renderer) {
   const notifications = [];
   const requests = [];
   const nested = [];
-  const active = ['read', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'];
+  const active = [
+    'read',
+    'subagents_launch',
+    'subagents_steer',
+    'subagents_wait',
+    'subagents_discard',
+    'subagents_status',
+  ];
   const schema = { type: 'object', properties: { path: { type: 'string' } }, required: ['path'] };
   const ctx = {
-    mode, hasUI: mode === 'tui' || mode === 'rpc', ui,
+    mode,
+    hasUI: mode === 'tui' || mode === 'rpc',
+    ui,
     cwd: directory,
     agentDir: directory,
     model: parentModel,
     thinkingLevel: 'medium',
     getSystemPrompt: () => 'Parent effective system prompt',
     isProjectTrusted: () => true,
-    tools: ['read', 'perplexity_search', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status'].map((name) => ({
-      name, label: name, description: name, parameters: schema,
-      execute() { assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks'); },
+    tools: [
+      'read',
+      'perplexity_search',
+      'subagents_launch',
+      'subagents_steer',
+      'subagents_wait',
+      'subagents_discard',
+      'subagents_status',
+    ].map((name) => ({
+      name,
+      label: name,
+      description: name,
+      parameters: schema,
+      execute() {
+        assert.fail('Tools must go through ctx.executeTool, not bypass parent hooks');
+      },
     })),
     async executeTool(name, args, options) {
       nested.push({ name, args, options });
-      return { result: { content: [{ type: 'text', text: 'permission denied' }], details: { checked: true } }, isError: true };
+      return {
+        result: {
+          content: [{ type: 'text', text: 'permission denied' }],
+          details: { checked: true },
+        },
+        isError: true,
+      };
     },
     modelRegistry: {
       find(provider, id) {
-        return [parentModel, childModel].find((model) => model.provider === provider && model.id === id);
+        return [parentModel, childModel].find(
+          (model) => model.provider === provider && model.id === id,
+        );
       },
       streamSimple(model, context, options) {
         const stream = createAssistantMessageEventStream();
         const request = {
-          model, context: structuredClone(context), options, stream,
+          model,
+          context: structuredClone(context),
+          options,
+          stream,
           finish(text = 'done', stopReason = 'stop', extra = {}) {
             const message = {
-              role: 'assistant', content: [{ type: 'text', text }],
-              api: model.api, provider: model.provider, model: model.id,
-              usage: { input: 1, output: 1, cacheRead: 0, cacheWrite: 0, totalTokens: 2,
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-              stopReason, timestamp: Date.now(), ...extra,
+              role: 'assistant',
+              content: [{ type: 'text', text }],
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              usage: {
+                input: 1,
+                output: 1,
+                cacheRead: 0,
+                cacheWrite: 0,
+                totalTokens: 2,
+                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+              },
+              stopReason,
+              timestamp: Date.now(),
+              ...extra,
             };
-            stream.push(stopReason === 'error' || stopReason === 'aborted'
-              ? { type: 'error', reason: stopReason, error: message }
-              : { type: 'done', reason: stopReason, message });
+            stream.push(
+              stopReason === 'error' || stopReason === 'aborted'
+                ? { type: 'error', reason: stopReason, error: message }
+                : { type: 'done', reason: stopReason, message },
+            );
             stream.end();
           },
         };
-        options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), { once: true });
+        options?.signal?.addEventListener('abort', () => request.finish('', 'aborted'), {
+          once: true,
+        });
         if (options?.signal?.aborted) queueMicrotask(() => request.finish('', 'aborted'));
         requests.push(request);
         return stream;
@@ -118,59 +202,121 @@ function harness(t, mode = 'print', renderer) {
     },
   };
   const pi = {
-    registerTool(tool) { tools.set(tool.name, tool); },
-    registerCommand(name, command) { commands.set(name, command); },
-    registerShortcut(key, shortcut) { shortcuts.set(key, shortcut); },
-    on(event, handler) { events.set(event, handler); },
-    getActiveTools() { return active; },
-    getThinkingLevel() { return 'low'; },
-    getSettings() { return { retry: { enabled: false }, cacheWarming: 'off', defaultTools: ['read', 'bash', 'edit', 'write'] }; },
-    sendMessage(message, options) { notifications.push({ message, options }); },
+    registerTool(tool) {
+      tools.set(tool.name, tool);
+    },
+    registerCommand(name, command) {
+      commands.set(name, command);
+    },
+    registerShortcut(key, shortcut) {
+      shortcuts.set(key, shortcut);
+    },
+    on(event, handler) {
+      events.set(event, handler);
+    },
+    getActiveTools() {
+      return active;
+    },
+    getThinkingLevel() {
+      return 'low';
+    },
+    getSettings() {
+      return {
+        retry: { enabled: false },
+        cacheWarming: 'off',
+        defaultTools: ['read', 'bash', 'edit', 'write'],
+      };
+    },
+    sendMessage(message, options) {
+      notifications.push({ message, options });
+    },
   };
   extension(pi);
-  const call = (name, params, signal) => tools.get(name).execute('parent-call', params, signal, undefined, ctx);
+  const call = (name, params, signal) =>
+    tools.get(name).execute('parent-call', params, signal, undefined, ctx);
   let nextName = 0;
   // Existing lifecycle fixtures use generated test names; name-contract tests call
   // the raw tool so missing names cannot be hidden by this convenience helper.
-  const launch = (tasks, signal) => call('subagents_launch', { tasks: tasks.map(task => ({
-    name: `${task.prompt.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 32).replace(/-+$/g, '') || 'task'}-${++nextName}`,
-    ...task,
-  })) }, signal);
+  const launch = (tasks, signal) =>
+    call(
+      'subagents_launch',
+      {
+        tasks: tasks.map((task) => ({
+          name: `${
+            task.prompt
+              .toLowerCase()
+              .replace(/[^a-z0-9]+/g, '-')
+              .replace(/^-+|-+$/g, '')
+              .slice(0, 32)
+              .replace(/-+$/g, '') || 'task'
+          }-${++nextName}`,
+          ...task,
+        })),
+      },
+      signal,
+    );
   const steer = (id, prompt) => call('subagents_steer', { id, prompt });
   t.after(() => events.get('session_shutdown')());
-  return { tools, events, commands, shortcuts, widgets, dialogs, notices, tui, inputListeners,
-    get renders() { return renders; }, notifications, requests, nested, active, ctx, pi, call, launch, steer };
+  return {
+    tools,
+    events,
+    commands,
+    shortcuts,
+    widgets,
+    dialogs,
+    notices,
+    tui,
+    inputListeners,
+    get renders() {
+      return renders;
+    },
+    notifications,
+    requests,
+    nested,
+    active,
+    ctx,
+    pi,
+    call,
+    launch,
+    steer,
+  };
 }
 
 function useChildTools(h, tools) {
-  h.ctx.extensionFactories = [(pi) => {
-    for (const [name, execute] of Object.entries(tools)) {
-      pi.registerTool({
-        name, label: name, description: name,
-        parameters: Type.Object({ path: Type.Optional(Type.String()) }),
-        execute,
-      });
-    }
-  }];
+  h.ctx.extensionFactories = [
+    (pi) => {
+      for (const [name, execute] of Object.entries(tools)) {
+        pi.registerTool({
+          name,
+          label: name,
+          description: name,
+          parameters: Type.Object({ path: Type.Optional(Type.String()) }),
+          execute,
+        });
+      }
+    },
+  ];
 }
 
 function observeChildLifecycle(t, h, shutdownGate) {
   const started = new Set();
   const stopped = new Set();
   const disposed = new Set();
-  h.ctx.extensionFactories = [(pi) => {
-    let id;
-    pi.on('session_start', (_event, ctx) => {
-      id = ctx.sessionManager.getSessionId();
-      started.add(id);
-    });
-    pi.on('session_shutdown', async () => {
-      await shutdownGate;
-      await setImmediate(); // Teardown must await asynchronous extension cleanup.
-      assert.equal(stopped.has(id), false, 'Shutdown runs exactly once.');
-      stopped.add(id);
-    });
-  }];
+  h.ctx.extensionFactories = [
+    (pi) => {
+      let id;
+      pi.on('session_start', (_event, ctx) => {
+        id = ctx.sessionManager.getSessionId();
+        started.add(id);
+      });
+      pi.on('session_shutdown', async () => {
+        await shutdownGate;
+        await setImmediate(); // Teardown must await asynchronous extension cleanup.
+        assert.equal(stopped.has(id), false, 'Shutdown runs exactly once.');
+        stopped.add(id);
+      });
+    },
+  ];
   const dispose = AgentSession.prototype.dispose;
   t.mock.method(AgentSession.prototype, 'dispose', function () {
     assert.ok(stopped.has(this.sessionId), 'Extension shutdown finishes before disposal.');
@@ -183,37 +329,77 @@ function observeChildLifecycle(t, h, shutdownGate) {
 
 function system(request) {
   const message = request.context.messages.find((message) => message.role === 'system') ?? {};
-  const sections = message.sections ? Object.values(message.sections).filter(Boolean).join('\n') : '';
-  const content = (typeof message.content === 'string' && message.content) ? message.content : sections || request.context.systemPrompt || '';
-  return { ...message, content, toolsAdded: message.toolsAdded ?? request.context.tools?.map((tool) => ({ name: tool.name })) ?? [] };
+  const sections = message.sections
+    ? Object.values(message.sections).filter(Boolean).join('\n')
+    : '';
+  const content =
+    typeof message.content === 'string' && message.content
+      ? message.content
+      : sections || request.context.systemPrompt || '';
+  return {
+    ...message,
+    content,
+    toolsAdded:
+      message.toolsAdded ?? request.context.tools?.map((tool) => ({ name: tool.name })) ?? [],
+  };
 }
 
 function userTexts(request) {
-  return request.context.messages.filter((message) => message.role === 'user').map((message) => (
-    typeof message.content === 'string' ? message.content : message.content.map((part) => part.text).join('\n')
-  ));
+  return request.context.messages
+    .filter((message) => message.role === 'user')
+    .map((message) =>
+      typeof message.content === 'string'
+        ? message.content
+        : message.content.map((part) => part.text).join('\n'),
+    );
 }
 
 test('loads through Pi’s real extension loader', async (t) => {
   const directory = await mkdtemp(join(tmpdir(), 'pi-subagents-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
   const loader = new DefaultResourceLoader({
-    cwd: directory, agentDir: directory, settingsManager: SettingsManager.inMemory(),
-    noExtensions: true, noSkills: true, noPromptTemplates: true, noThemes: true, noContextFiles: true,
+    cwd: directory,
+    agentDir: directory,
+    settingsManager: SettingsManager.inMemory(),
+    noExtensions: true,
+    noSkills: true,
+    noPromptTemplates: true,
+    noThemes: true,
+    noContextFiles: true,
     additionalExtensionPaths: [fileURLToPath(new URL('../index.ts', import.meta.url))],
   });
   await loader.reload();
   const result = loader.getExtensions();
   assert.deepEqual(result.errors, []);
   assert.equal(result.extensions.length, 1);
-  assert.deepEqual([...result.extensions[0].tools.keys()], ['subagents_list', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
+  assert.deepEqual(
+    [...result.extensions[0].tools.keys()],
+    [
+      'subagents_list',
+      'subagents_launch',
+      'subagents_steer',
+      'subagents_wait',
+      'subagents_discard',
+      'subagents_status',
+    ],
+  );
   assert.equal(result.extensions[0].commands.size, 0);
   assert.equal(result.extensions[0].shortcuts.size, 0);
 });
 
 test('registers launch, steer, wait, discard and status tools with structured output contracts', (t) => {
   const h = harness(t);
-  assert.deepEqual([...h.tools.keys()], ['subagents_list', 'subagents_launch', 'subagents_steer', 'subagents_wait', 'subagents_discard', 'subagents_status']);
+  assert.deepEqual(
+    [...h.tools.keys()],
+    [
+      'subagents_list',
+      'subagents_launch',
+      'subagents_steer',
+      'subagents_wait',
+      'subagents_discard',
+      'subagents_status',
+    ],
+  );
   for (const tool of h.tools.values()) assert.equal(tool.outputSchema.type, 'object');
 });
 
@@ -233,7 +419,13 @@ test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out
   assert.match(guidance, /outweighs delegation overhead/);
   assert.match(guidance, /user explicitly requests subagents/);
   assert.match(guidance, /Independence alone is not enough/);
-  for (const task of ['routine searches', 'a few file reads', 'small edits', 'ordinary test commands', 'tightly coupled planning/implementation/testing']) {
+  for (const task of [
+    'routine searches',
+    'a few file reads',
+    'small edits',
+    'ordinary test commands',
+    'tightly coupled planning/implementation/testing',
+  ]) {
     assert.ok(guidance.includes(task), `Missing keep-local guidance for ${task}`);
   }
   assert.match(guidance, /parallel tool calls for simple concurrency/);
@@ -248,7 +440,10 @@ test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out
   assert.doesNotMatch(guidance, /Use subagents_launch for independent work\./);
   // Retain the background lifecycle and result-validation guidance.
   assert.match(guidance, /automatically resume an idle parent/);
-  assert.match(guidance, /Do not declare delegated work complete until you have checked its result/);
+  assert.match(
+    guidance,
+    /Do not declare delegated work complete until you have checked its result/,
+  );
   assert.match(guidance, /Check each returned status before continuing/);
   assert.match(guidance, /After reviewing and integrating.*subagents_discard/);
   assert.match(guidance, /never discard unread results/);
@@ -256,16 +451,25 @@ test('parent delegation guidelines discourage microtasks, idle handoffs, fan-out
 
 test('finished jobs retain live sessions until discard and preserve bounded reports', async (t) => {
   const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'release heavy state' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'release heavy state' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find(job => job.id === id);
+  const job = menu.actions.jobs().find((job) => job.id === id);
   h.ctx.executeTool = async () => ({
-    result: { content: [{ type: 'text', text: 'HEAVY_TOOL_PAYLOAD'.repeat(10000) }], details: undefined },
+    result: {
+      content: [{ type: 'text', text: 'HEAVY_TOOL_PAYLOAD'.repeat(10000) }],
+      details: undefined,
+    },
     isError: false,
   });
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'heavy-read', name: 'read', arguments: { path: 'large.txt' } }],
+    content: [
+      { type: 'toolCall', id: 'heavy-read', name: 'read', arguments: { path: 'large.txt' } },
+    ],
   });
   await until(() => h.requests.length === 2);
   streamPartial(h.requests[1], 'partial response', 'private reasoning');
@@ -289,7 +493,9 @@ test('finished jobs retain live sessions until discard and preserve bounded repo
 test('discard, eviction and parent cleanup await child extension shutdown before disposal', async (t) => {
   const h = harness(t);
   const lifecycle = observeChildLifecycle(t, h);
-  const { structuredContent: { ids } } = await h.launch(Array.from({ length: 22 }, (_, i) => ({ prompt: `child ${i}`, tools: [] })));
+  const {
+    structuredContent: { ids },
+  } = await h.launch(Array.from({ length: 22 }, (_, i) => ({ prompt: `child ${i}`, tools: [] })));
   await until(() => h.requests.length === 22);
   for (const request of h.requests.slice(0, 21)) request.finish('finished');
   await h.call('subagents_wait', { ids: ids.slice(0, 21) });
@@ -308,17 +514,25 @@ test('discard, eviction and parent cleanup await child extension shutdown before
 test('parent cleanup waits for an already-discarded child that is still shutting down', async (t) => {
   const h = harness(t);
   let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
   t.after(() => release());
   const lifecycle = observeChildLifecycle(t, h, gate);
-  const { structuredContent: { ids } } = await h.launch([{ prompt: 'finish before cleanup', tools: [] }]);
+  const {
+    structuredContent: { ids },
+  } = await h.launch([{ prompt: 'finish before cleanup', tools: [] }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('finished');
   await h.call('subagents_wait', { ids });
   const discarding = h.call('subagents_discard', { ids });
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
   let cleaned = false;
-  const cleanup = h.events.get('session_shutdown')().then(() => { cleaned = true; });
+  const cleanup = h.events
+    .get('session_shutdown')()
+    .then(() => {
+      cleaned = true;
+    });
   await setImmediate();
   assert.equal(cleaned, false);
   assert.equal(lifecycle.disposed.size, 0);
@@ -338,10 +552,13 @@ for (const failure of ['tool validation', 'extension binding']) {
         throw new Error('binding failed');
       });
     }
-    await assert.rejects(h.launch([
-      { name: 'first-child', prompt: 'valid', tools: [] },
-      { name: 'second-child', prompt: 'invalid', tools: ['missing-tool'] },
-    ]), failure === 'tool validation' ? /Unavailable subagent tool/ : /binding failed/);
+    await assert.rejects(
+      h.launch([
+        { name: 'first-child', prompt: 'valid', tools: [] },
+        { name: 'second-child', prompt: 'invalid', tools: ['missing-tool'] },
+      ]),
+      failure === 'tool validation' ? /Unavailable subagent tool/ : /binding failed/,
+    );
     assert.equal(lifecycle.started.size, failure === 'tool validation' ? 2 : 1);
     assert.deepEqual(lifecycle.stopped, lifecycle.started);
     assert.deepEqual(lifecycle.disposed, lifecycle.started);
@@ -354,30 +571,56 @@ for (const failure of ['tool validation', 'extension binding']) {
 
 test('discard validates the full batch, rejects unfinished jobs and removes only selected finished reports', async (t) => {
   const h = harness(t);
-  const { details: { ids: [finished, running] } } = await h.launch([{ prompt: 'finished' }, { prompt: 'still running' }]);
+  const {
+    details: {
+      ids: [finished, running],
+    },
+  } = await h.launch([{ prompt: 'finished' }, { prompt: 'still running' }]);
   await until(() => h.requests.length === 2);
   h.requests[0].finish('reviewed answer');
   await h.call('subagents_wait', { ids: [finished] });
-  for (const ids of [[], [finished, finished], [finished, 'missing'], [finished, running], [finished.slice(0, 8)]]) {
+  for (const ids of [
+    [],
+    [finished, finished],
+    [finished, 'missing'],
+    [finished, running],
+    [finished.slice(0, 8)],
+  ]) {
     await assert.rejects(h.call('subagents_discard', { ids }));
     assert.equal((await h.call('subagents_status', {})).structuredContent.agents.length, 2);
   }
   const controller = new AbortController();
   controller.abort();
-  await assert.rejects(h.call('subagents_discard', { ids: [finished] }, controller.signal), { name: 'AbortError' });
+  await assert.rejects(h.call('subagents_discard', { ids: [finished] }, controller.signal), {
+    name: 'AbortError',
+  });
   const result = await h.call('subagents_discard', { ids: [finished] });
   assert.deepEqual(result.structuredContent, { ids: [finished] });
-  await assert.rejects(h.call('subagents_status', { id: finished }), /Unknown or no longer retained/);
-  await assert.rejects(h.call('subagents_wait', { ids: [finished] }), /Unknown or no longer retained/);
+  await assert.rejects(
+    h.call('subagents_status', { id: finished }),
+    /Unknown or no longer retained/,
+  );
+  await assert.rejects(
+    h.call('subagents_wait', { ids: [finished] }),
+    /Unknown or no longer retained/,
+  );
   await assert.rejects(h.steer(finished, 'late guidance'), /no longer retained/);
-  await assert.rejects(h.call('subagents_discard', { ids: [finished] }), /Unknown or no longer retained/);
+  await assert.rejects(
+    h.call('subagents_discard', { ids: [finished] }),
+    /Unknown or no longer retained/,
+  );
   assert.equal(h.requests[1].options.signal.aborted, false);
-  assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents.map(job => job.id), [running]);
+  assert.deepEqual(
+    (await h.call('subagents_status', {})).structuredContent.agents.map((job) => job.id),
+    [running],
+  );
 });
 
 test('discard does not invalidate reports held by an already-running batch wait', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
+  const {
+    details: { ids },
+  } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
   await until(() => h.requests.length === 2);
   const waiting = h.call('subagents_wait', { ids });
   h.requests[0].finish('first findings');
@@ -386,7 +629,10 @@ test('discard does not invalidate reports held by an already-running batch wait'
   h.requests[1].finish('second findings');
   const result = (await waiting).structuredContent;
   assert.equal(result.timedOut, false);
-  assert.deepEqual(result.agents.map(agent => agent.id), ids);
+  assert.deepEqual(
+    result.agents.map((agent) => agent.id),
+    ids,
+  );
   assert.match(result.agents[0].result, /first findings/);
   assert.match(result.agents[1].result, /second findings/);
 });
@@ -395,10 +641,19 @@ for (const stopReason of ['error', 'aborted']) {
   test(`failed jobs release agent state and can be discarded even if notification enqueue fails (${stopReason})`, async (t) => {
     const h = harness(t, 'tui');
     t.mock.method(console, 'error', () => {});
-    h.pi.sendMessage = () => { throw new Error('enqueue unavailable'); };
-    const { details: { ids: [id] } } = await h.launch([{ prompt: 'failure cleanup' }]);
+    h.pi.sendMessage = () => {
+      throw new Error('enqueue unavailable');
+    };
+    const {
+      details: {
+        ids: [id],
+      },
+    } = await h.launch([{ prompt: 'failure cleanup' }]);
     await until(() => h.requests.length === 1);
-    const job = h.widgets.get('subagents.pi').actions.jobs().find(job => job.id === id);
+    const job = h.widgets
+      .get('subagents.pi')
+      .actions.jobs()
+      .find((job) => job.id === id);
     h.requests[0].finish('recoverable findings', stopReason, { errorMessage: 'provider failed' });
     const result = (await h.call('subagents_wait', { ids: [id] })).structuredContent.agents[0];
     assert.equal(result.notification, 'failed');
@@ -417,13 +672,21 @@ test('launch requires short kebab-case names and uses them unchanged as IDs thro
   const taskSchema = h.tools.get('subagents_launch').parameters.properties.tasks.items;
   assert.ok(taskSchema.required.includes('name'));
   assert.equal(taskSchema.properties.name.maxLength, 48);
-  assert.match(h.tools.get('subagents_launch').promptGuidelines.join('\n'), /meaningful short kebab-case name/);
-  const launched = await h.call('subagents_launch', { tasks: [
-    { name: 'review-parser', prompt: 'Full task context that must not appear in the footer' },
-    { name: 'write-tests', prompt: 'Another detailed assignment for the child' },
-  ] });
+  assert.match(
+    h.tools.get('subagents_launch').promptGuidelines.join('\n'),
+    /meaningful short kebab-case name/,
+  );
+  const launched = await h.call('subagents_launch', {
+    tasks: [
+      { name: 'review-parser', prompt: 'Full task context that must not appear in the footer' },
+      { name: 'write-tests', prompt: 'Another detailed assignment for the child' },
+    ],
+  });
   assert.deepEqual(launched.structuredContent.ids, ['review-parser', 'write-tests']);
-  assert.deepEqual(launched.structuredContent.agents.map(agent => agent.id), ['review-parser', 'write-tests']);
+  assert.deepEqual(
+    launched.structuredContent.agents.map((agent) => agent.id),
+    ['review-parser', 'write-tests'],
+  );
   await until(() => h.requests.length === 2);
   const widget = screen(h.widgets.get('subagents.pi'));
   assert.match(widget, /review-parser/);
@@ -431,46 +694,88 @@ test('launch requires short kebab-case names and uses them unchanged as IDs thro
   assert.doesNotMatch(widget, /Full task context|Another detailed|Ctrl\+Shift\+A|\/subagents/);
   const steered = await h.steer('review-parser', 'Additional direction');
   assert.equal(steered.structuredContent.accepted, true);
-  assert.equal((await h.call('subagents_status', { id: 'review-parser' })).structuredContent.agents[0].id, 'review-parser');
+  assert.equal(
+    (await h.call('subagents_status', { id: 'review-parser' })).structuredContent.agents[0].id,
+    'review-parser',
+  );
   h.requests[0].finish('first pass');
   h.requests[1].finish('tests complete');
   await until(() => h.requests.length === 3);
   h.requests[2].finish('final parser review');
   const result = await h.call('subagents_wait', { ids: ['review-parser', 'write-tests'] });
-  assert.deepEqual(result.structuredContent.agents.map(agent => agent.id), ['review-parser', 'write-tests']);
+  assert.deepEqual(
+    result.structuredContent.agents.map((agent) => agent.id),
+    ['review-parser', 'write-tests'],
+  );
   assert.match(result.structuredContent.agents[0].result, /Subagent review-parser completed/);
-  assert.ok(h.notifications.some(item => item.message.details.id === 'review-parser'));
+  assert.ok(h.notifications.some((item) => item.message.details.id === 'review-parser'));
   await h.call('subagents_discard', { ids: ['review-parser', 'write-tests'] });
   assert.equal(screen(h.widgets.get('subagents.pi')), '');
 });
 
 test('invalid, missing and duplicate names reject the whole batch without starting or reserving children', async (t) => {
   const h = harness(t);
-  for (const name of [undefined, null, 123, '', ' ', 'Upper-case', 'two words', 'snake_case', '-leading',
-    'trailing-', 'double--dash', '1-leading', '日本語', 'line-break\n', 'a'.repeat(49)]) {
-    await assert.rejects(h.call('subagents_launch', { tasks: [
-      { name: 'valid-task', prompt: 'valid' }, { name, prompt: 'invalid name' },
-    ] }), /lowercase kebab-case/);
+  for (const name of [
+    undefined,
+    null,
+    123,
+    '',
+    ' ',
+    'Upper-case',
+    'two words',
+    'snake_case',
+    '-leading',
+    'trailing-',
+    'double--dash',
+    '1-leading',
+    '日本語',
+    'line-break\n',
+    'a'.repeat(49),
+  ]) {
+    await assert.rejects(
+      h.call('subagents_launch', {
+        tasks: [
+          { name: 'valid-task', prompt: 'valid' },
+          { name, prompt: 'invalid name' },
+        ],
+      }),
+      /lowercase kebab-case/,
+    );
   }
-  await assert.rejects(h.call('subagents_launch', { tasks: [
-    { name: 'same-name', prompt: 'one' }, { name: 'same-name', prompt: 'two' },
-  ] }), /name already used/);
-  await assert.rejects(h.call('subagents_launch', { tasks: [
-    { name: 'valid-task', prompt: 'valid' }, { name: 'bad-model', prompt: 'invalid model', model: 'missing' },
-  ] }), /Unknown subagent model/);
+  await assert.rejects(
+    h.call('subagents_launch', {
+      tasks: [
+        { name: 'same-name', prompt: 'one' },
+        { name: 'same-name', prompt: 'two' },
+      ],
+    }),
+    /name already used/,
+  );
+  await assert.rejects(
+    h.call('subagents_launch', {
+      tasks: [
+        { name: 'valid-task', prompt: 'valid' },
+        { name: 'bad-model', prompt: 'invalid model', model: 'missing' },
+      ],
+    }),
+    /Unknown subagent model/,
+  );
   assert.equal(h.requests.length, 0);
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
-  const result = await h.call('subagents_launch', { tasks: [{ name: 'valid-task', prompt: 'allowed after failed validation' }] });
+  const result = await h.call('subagents_launch', {
+    tasks: [{ name: 'valid-task', prompt: 'allowed after failed validation' }],
+  });
   assert.deepEqual(result.structuredContent.ids, ['valid-task']);
   await until(() => h.requests.length === 1);
 });
 
 test('names cannot collide across concurrent launches or be reused after discard, but reset with the session', async (t) => {
   const h = harness(t);
-  const launch = () => h.call('subagents_launch', { tasks: [{ name: 'review-parser', prompt: 'task' }] });
+  const launch = () =>
+    h.call('subagents_launch', { tasks: [{ name: 'review-parser', prompt: 'task' }] });
   const attempts = await Promise.allSettled([launch(), launch()]);
-  assert.equal(attempts.filter(result => result.status === 'fulfilled').length, 1);
-  assert.equal(attempts.filter(result => result.status === 'rejected').length, 1);
+  assert.equal(attempts.filter((result) => result.status === 'fulfilled').length, 1);
+  assert.equal(attempts.filter((result) => result.status === 'rejected').length, 1);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('report');
   await h.call('subagents_wait', { ids: ['review-parser'] });
@@ -528,7 +833,10 @@ function writeRole(h, body = 'ROLE_ONLY_TOKEN: zeta-seven', extra = '') {
   const dir = join(h.ctx.cwd, '.agents', 'agents');
   mkdirSync(dir, { recursive: true });
   const path = join(dir, 'fixture-role.md');
-  writeFileSync(path, `---\nname: fixture-reviewer\ndescription: Review fixture logic independently.\n${extra}---\n${body}\n`);
+  writeFileSync(
+    path,
+    `---\nname: fixture-reviewer\ndescription: Review fixture logic independently.\n${extra}---\n${body}\n`,
+  );
   return realpathSync(path);
 }
 
@@ -536,9 +844,15 @@ test('named definitions are discoverable without launching jobs or exposing thei
   const h = harness(t);
   const path = writeRole(h);
   const result = await h.call('subagents_list', {});
-  assert.deepEqual(result.structuredContent.agents.find(a => a.name === 'fixture-reviewer'), {
-    name: 'fixture-reviewer', description: 'Review fixture logic independently.', filePath: path, source: 'project',
-  });
+  assert.deepEqual(
+    result.structuredContent.agents.find((a) => a.name === 'fixture-reviewer'),
+    {
+      name: 'fixture-reviewer',
+      description: 'Review fixture logic independently.',
+      filePath: path,
+      source: 'project',
+    },
+  );
   assert.doesNotMatch(JSON.stringify(result), /zeta-seven/);
   assert.equal(h.requests.length, 0);
   const event = { systemPromptOptions: { sections: { existing: 'preserved' } } };
@@ -554,7 +868,15 @@ test('named definitions are discoverable without launching jobs or exposing thei
 test('named launch injects its body and source path into the real child system prompt, separate from the task', async (t) => {
   const h = harness(t);
   const path = writeRole(h);
-  const result = await h.launch([{ name: 'role-job', agent: 'fixture-reviewer', prompt: 'Review my change.', tools: [], appendSystemPrompt: 'Task appendix' }]);
+  const result = await h.launch([
+    {
+      name: 'role-job',
+      agent: 'fixture-reviewer',
+      prompt: 'Review my change.',
+      tools: [],
+      appendSystemPrompt: 'Task appendix',
+    },
+  ]);
   await until(() => h.requests.length === 1);
   const prompt = system(h.requests[0]).content;
   assert.match(prompt, /^Parent effective system prompt/);
@@ -585,14 +907,17 @@ test('named instructions also load without a parent effective-prompt getter', as
 test('unknown or invalid roles fail the entire batch without model calls or name reservations', async (t) => {
   const h = harness(t);
   writeRole(h);
-  const tasks = [{ name: 'valid-job', agent: 'fixture-reviewer', prompt: 'valid' }, { name: 'invalid-job', agent: 'missing-role', prompt: 'invalid' }];
+  const tasks = [
+    { name: 'valid-job', agent: 'fixture-reviewer', prompt: 'valid' },
+    { name: 'invalid-job', agent: 'missing-role', prompt: 'invalid' },
+  ];
   await assert.rejects(h.launch(tasks), /Unknown or invalid agent definition.*missing-role/);
   assert.equal(h.requests.length, 0);
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent.agents, []);
   writeRole(h, 'bad configuration', 'permissionMode: bypassPermissions\n');
   await assert.rejects(h.launch([tasks[0]]), /Unknown or invalid agent definition/);
   const invalid = await h.call('subagents_list', {});
-  assert.ok(invalid.structuredContent.diagnostics.some(d => d.includes('permissionMode')));
+  assert.ok(invalid.structuredContent.diagnostics.some((d) => d.includes('permissionMode')));
   writeRole(h);
   await h.launch([tasks[0]]); // The failed batch did not reserve valid-job.
   await until(() => h.requests.length === 1);
@@ -605,34 +930,58 @@ test('trusted-project definitions refresh on launch and do not leak into generic
   await h.launch([{ agent: 'fixture-reviewer', prompt: 'first', tools: [] }]);
   await until(() => h.requests.length === 1);
   writeRole(h, 'SECOND_ROLE_BODY');
-  await h.launch([{ agent: 'fixture-reviewer', prompt: 'second', tools: [] }, { prompt: 'generic', tools: [] }]);
+  await h.launch([
+    { agent: 'fixture-reviewer', prompt: 'second', tools: [] },
+    { prompt: 'generic', tools: [] },
+  ]);
   await until(() => h.requests.length === 3);
   assert.match(system(h.requests[0]).content, /FIRST_ROLE_BODY/);
   assert.doesNotMatch(system(h.requests[0]).content, /SECOND_ROLE_BODY/);
   assert.match(system(h.requests[1]).content, /SECOND_ROLE_BODY/);
   assert.doesNotMatch(system(h.requests[2]).content, /FIRST_ROLE_BODY|SECOND_ROLE_BODY/);
   h.ctx.isProjectTrusted = () => false;
-  assert.ok(!(await h.call('subagents_list', {})).structuredContent.agents.some(a => a.name === 'fixture-reviewer'));
-  await assert.rejects(h.launch([{ agent: 'fixture-reviewer', prompt: 'untrusted' }]), /Unknown or invalid agent definition/);
+  assert.ok(
+    !(await h.call('subagents_list', {})).structuredContent.agents.some(
+      (a) => a.name === 'fixture-reviewer',
+    ),
+  );
+  await assert.rejects(
+    h.launch([{ agent: 'fixture-reviewer', prompt: 'untrusted' }]),
+    /Unknown or invalid agent definition/,
+  );
   h.ctx.isProjectTrusted = () => true;
   unlinkSync(path);
-  await assert.rejects(h.launch([{ agent: 'fixture-reviewer', prompt: 'deleted' }]), /Unknown or invalid agent definition/);
-  h.requests.forEach(r => r.finish());
+  await assert.rejects(
+    h.launch([{ agent: 'fixture-reviewer', prompt: 'deleted' }]),
+    /Unknown or invalid agent definition/,
+  );
+  h.requests.forEach((r) => r.finish());
 });
 
 test('passes model, provider, thinking, exact tools, system prompt and prompt to the real Agent', async (t) => {
   const h = harness(t);
-  await h.launch([{
-    prompt: 'my task', provider: childModel.provider, model: childModel.id,
-    thinkingLevel: 'high', tools: ['read'], appendSystemPrompt: 'Custom system instructions',
-  }]);
+  await h.launch([
+    {
+      prompt: 'my task',
+      provider: childModel.provider,
+      model: childModel.id,
+      thinkingLevel: 'high',
+      tools: ['read'],
+      appendSystemPrompt: 'Custom system instructions',
+    },
+  ]);
   await until(() => h.requests.length === 1);
   const request = h.requests[0];
   assert.equal(request.model, childModel);
   assert.equal(request.options.reasoning, 'high');
   assert.match(system(request).content, /^Parent effective system prompt/);
   assert.match(system(request).content, /Custom system instructions$/);
-  assert.deepEqual(system(request).toolsAdded.map((tool) => tool.name).sort(), ['read', 'subagents_ask']);
+  assert.deepEqual(
+    system(request)
+      .toolsAdded.map((tool) => tool.name)
+      .sort(),
+    ['read', 'subagents_ask'],
+  );
   assert.deepEqual(userTexts(request), ['my task']);
   request.finish('custom answer');
   await until(() => h.notifications.length === 1);
@@ -648,10 +997,27 @@ test('inherits model/thinking and all callable tools, without orchestration tool
   assert.match(system(request).content, /^Parent effective system prompt/);
   assert.match(system(request).content, /child Pi session/);
   assert.match(system(request).content, /do not inherit its conversation history/i);
-  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('read'));
-  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('bash'));
-  assert.ok(system(request).toolsAdded.map((tool) => tool.name).includes('subagents_ask'));
-  assert.deepEqual(system(h.requests[1]).toolsAdded.map((tool) => tool.name).sort(), ['read', 'subagents_ask']);
+  assert.ok(
+    system(request)
+      .toolsAdded.map((tool) => tool.name)
+      .includes('read'),
+  );
+  assert.ok(
+    system(request)
+      .toolsAdded.map((tool) => tool.name)
+      .includes('bash'),
+  );
+  assert.ok(
+    system(request)
+      .toolsAdded.map((tool) => tool.name)
+      .includes('subagents_ask'),
+  );
+  assert.deepEqual(
+    system(h.requests[1])
+      .toolsAdded.map((tool) => tool.name)
+      .sort(),
+    ['read', 'subagents_ask'],
+  );
   assert.deepEqual(userTexts(request), ['default task']);
   h.requests.forEach((request) => request.finish());
   await until(() => h.notifications.length === 2);
@@ -661,23 +1027,45 @@ test('child sessions execute extension and MCP-named tools themselves, independe
   const h = harness(t);
   h.active.splice(0, h.active.length, 'bash', 'codemode', 'subagents_launch');
   const seen = [];
-  useChildTools(h, Object.fromEntries(['openrouter_web_search', 'mcp__example__search'].map((name) => [name, async (_id, args, signal) => {
-    seen.push({ name, args, signal });
-    return { content: [{ type: 'text', text: `${name} ok` }], details: {} };
-  }])));
+  useChildTools(
+    h,
+    Object.fromEntries(
+      ['openrouter_web_search', 'mcp__example__search'].map((name) => [
+        name,
+        async (_id, args, signal) => {
+          seen.push({ name, args, signal });
+          return { content: [{ type: 'text', text: `${name} ok` }], details: {} };
+        },
+      ]),
+    ),
+  );
   await h.launch([{ prompt: 'use every callable tool' }]);
   await until(() => h.requests.length === 1);
   const enabled = system(h.requests[0]).toolsAdded.map((tool) => tool.name);
-  for (const name of ['read', 'bash', 'edit', 'write', 'openrouter_web_search', 'mcp__example__search', 'subagents_ask']) {
+  for (const name of [
+    'read',
+    'bash',
+    'edit',
+    'write',
+    'openrouter_web_search',
+    'mcp__example__search',
+    'subagents_ask',
+  ]) {
     assert.ok(enabled.includes(name), name);
   }
   h.requests[0].finish('', 'toolUse', {
     content: ['openrouter_web_search', 'mcp__example__search'].map((name, i) => ({
-      type: 'toolCall', id: `child-tool-${i}`, name, arguments: { path: 'example.ts' },
+      type: 'toolCall',
+      id: `child-tool-${i}`,
+      name,
+      arguments: { path: 'example.ts' },
     })),
   });
   await until(() => h.requests.length === 2);
-  assert.deepEqual(seen.map((call) => call.name).sort(), ['mcp__example__search', 'openrouter_web_search']);
+  assert.deepEqual(seen.map((call) => call.name).sort(), [
+    'mcp__example__search',
+    'openrouter_web_search',
+  ]);
   assert.ok(seen.every((call) => call.signal === h.requests[0].options.signal));
   assert.equal(h.nested.length, 0);
   h.requests[1].finish('child tools ran in the child');
@@ -687,7 +1075,10 @@ test('child sessions execute extension and MCP-named tools themselves, independe
 test('explicit empty tools are respected and an empty append does not replace the parent prompt; thinking falls back to pi', async (t) => {
   const h = harness(t);
   delete h.ctx.thinkingLevel;
-  await h.launch([{ prompt: 'no tools', tools: [], thinkingLevel: 'off', appendSystemPrompt: '   ' }, { prompt: 'fallback' }]);
+  await h.launch([
+    { prompt: 'no tools', tools: [], thinkingLevel: 'off', appendSystemPrompt: '   ' },
+    { prompt: 'fallback' },
+  ]);
   await until(() => h.requests.length === 2);
   const empty = h.requests.find((request) => userTexts(request).includes('no tools'));
   const fallback = h.requests.find((request) => userTexts(request).includes('fallback'));
@@ -709,7 +1100,11 @@ test('parallel launch calls keep independent IDs and state', async (t) => {
 
 test('steering reaches the running child on its next request, not the parent', async (t) => {
   const h = harness(t);
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'original task' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'original task' }]);
   await until(() => h.requests.length === 1);
   await h.steer(id, 'focus on tests instead');
   assert.equal(h.requests.length, 1);
@@ -729,7 +1124,11 @@ test('child tools use the child signal, not the parent launch signal, and preser
   useChildTools(h, {
     guarded_read: async (_id, args, signal) => {
       seen.push({ args, signal });
-      return { content: [{ type: 'text', text: 'permission denied' }], details: { checked: true }, isError: true };
+      return {
+        content: [{ type: 'text', text: 'permission denied' }],
+        details: { checked: true },
+        isError: true,
+      };
     },
   });
   const controller = new AbortController();
@@ -738,14 +1137,23 @@ test('child tools use the child signal, not the parent launch signal, and preser
   controller.abort();
   assert.equal(h.requests[0].options.signal.aborted, false);
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'child-read', name: 'guarded_read', arguments: { path: 'example.ts' } }],
+    content: [
+      {
+        type: 'toolCall',
+        id: 'child-read',
+        name: 'guarded_read',
+        arguments: { path: 'example.ts' },
+      },
+    ],
   });
   await until(() => h.requests.length === 2);
   assert.equal(seen.length, 1);
   assert.deepEqual(seen[0].args, { path: 'example.ts' });
   assert.equal(seen[0].signal, h.requests[0].options.signal);
   assert.notEqual(seen[0].signal, controller.signal);
-  const toolResult = h.requests[1].context.messages.find((message) => message.role === 'toolResult');
+  const toolResult = h.requests[1].context.messages.find(
+    (message) => message.role === 'toolResult',
+  );
   assert.equal(toolResult.isError, true);
   assert.equal(toolResult.content[0].text, 'permission denied');
   h.requests[1].finish('reported denial');
@@ -756,7 +1164,9 @@ test('steering during a child tool execution waits for that tool, then changes t
   const h = harness(t);
   let release;
   let toolStarted = false;
-  const toolFinished = new Promise((resolve) => { release = resolve; });
+  const toolFinished = new Promise((resolve) => {
+    release = resolve;
+  });
   t.after(() => release());
   useChildTools(h, {
     slow_read: async () => {
@@ -765,10 +1175,16 @@ test('steering during a child tool execution waits for that tool, then changes t
       return { content: [{ type: 'text', text: 'file read' }], details: {} };
     },
   });
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'inspect files' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'inspect files' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('', 'toolUse', {
-    content: [{ type: 'toolCall', id: 'reading', name: 'slow_read', arguments: { path: 'file.ts' } }],
+    content: [
+      { type: 'toolCall', id: 'reading', name: 'slow_read', arguments: { path: 'file.ts' } },
+    ],
   });
   await until(() => toolStarted);
   await h.steer(id, 'only report the tests');
@@ -809,15 +1225,29 @@ for (const recovered of [true, false]) {
   test(`automatic retry ${recovered ? 'success completes' : 'exhaustion fails'} based on the final outcome`, async (t) => {
     const h = harness(t);
     const settings = h.pi.getSettings();
-    h.pi.getSettings = () => ({ ...settings, retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 } });
-    const { structuredContent: { ids: [id] } } = await h.launch([{ prompt: 'retry transient failures', tools: [] }]);
+    h.pi.getSettings = () => ({
+      ...settings,
+      retry: { enabled: true, maxRetries: 1, baseDelayMs: 1 },
+    });
+    const {
+      structuredContent: {
+        ids: [id],
+      },
+    } = await h.launch([{ prompt: 'retry transient failures', tools: [] }]);
     await until(() => h.requests.length === 1);
     h.requests[0].finish('first attempt', 'error', { errorMessage: '503 Service Unavailable' });
     await until(() => h.requests.length === 2);
     assert.equal(h.notifications.length, 0, 'An intermediate failure is not a final report.');
     if (recovered) h.requests[1].finish('Success after retry');
-    else h.requests[1].finish('final partial output', 'error', { errorMessage: '503 retry exhausted' });
-    const { structuredContent: { agents: [job] } } = await h.call('subagents_wait', { ids: [id] });
+    else
+      h.requests[1].finish('final partial output', 'error', {
+        errorMessage: '503 retry exhausted',
+      });
+    const {
+      structuredContent: {
+        agents: [job],
+      },
+    } = await h.call('subagents_wait', { ids: [id] });
     assert.equal(job.status, recovered ? 'completed' : 'failed');
     assert.equal(job.error, recovered ? null : '503 retry exhausted');
     assert.match(job.result, recovered ? /Success after retry/ : /final partial output/);
@@ -840,7 +1270,11 @@ test('reports provider failure once, including error details and any text respon
 for (const stopReason of ['error', 'aborted']) {
   test(`queued steering cannot restart a provider ${stopReason}`, async (t) => {
     const h = harness(t);
-    const { details: { ids: [id] } } = await h.launch([{ prompt: 'must fail once' }]);
+    const {
+      details: {
+        ids: [id],
+      },
+    } = await h.launch([{ prompt: 'must fail once' }]);
     await until(() => h.requests.length === 1);
     await h.steer(id, 'do not implicitly restart after a hard exit');
     h.requests[0].finish('partial output', stopReason, { errorMessage: 'hard exit' });
@@ -858,7 +1292,9 @@ for (const stopReason of ['error', 'aborted']) {
 
 test('reports a thrown provider exception without an unhandled rejection', async (t) => {
   const h = harness(t);
-  h.ctx.modelRegistry.streamSimple = () => { throw new Error('broken provider'); };
+  h.ctx.modelRegistry.streamSimple = () => {
+    throw new Error('broken provider');
+  };
   await h.launch([{ prompt: 'fail' }]);
   await until(() => h.notifications.length === 1);
   assert.equal(h.notifications[0].message.details.status, 'failed');
@@ -868,7 +1304,11 @@ test('reports a thrown provider exception without an unhandled rejection', async
 for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
   test(`${event} aborts children, suppresses stale notifications, and is idempotent`, async (t) => {
     const h = harness(t);
-    const { details: { ids: [id] } } = await h.launch([{ prompt: 'still running' }]);
+    const {
+      details: {
+        ids: [id],
+      },
+    } = await h.launch([{ prompt: 'still running' }]);
     await until(() => h.requests.length === 1);
     await h.events.get(event)();
     assert.equal(h.requests[0].options.signal.aborted, true);
@@ -892,7 +1332,8 @@ test('large responses are truncated with the complete answer saved to a file', a
   const full = await readFile(details.fullOutputPath, 'utf8');
   assert.ok(full.endsWith(answer));
   assert.equal((await fsPromises.stat(details.fullOutputPath)).mode & 0o777, 0o600);
-  const retained = (await h.call('subagents_status', { id: details.id })).structuredContent.agents[0];
+  const retained = (await h.call('subagents_status', { id: details.id })).structuredContent
+    .agents[0];
   assert.equal(retained.fullOutputPath, details.fullOutputPath);
   assert.match(retained.result, /Output truncated/);
   assert.ok(retained.result.length < full.length);
@@ -904,11 +1345,21 @@ function screen(component, width = 96) {
 
 function streamPartial(request, text, thinking = '') {
   const partial = {
-    role: 'assistant', api: request.model.api, provider: request.model.provider, model: request.model.id,
+    role: 'assistant',
+    api: request.model.api,
+    provider: request.model.provider,
+    model: request.model.id,
     content: [...(thinking ? [{ type: 'thinking', thinking }] : []), { type: 'text', text }],
-    usage: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0,
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } },
-    stopReason: 'stop', timestamp: Date.now(),
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: 'stop',
+    timestamp: Date.now(),
   };
   request.stream.push({ type: 'start', partial: structuredClone(partial) });
   request.stream.push({ type: 'text_delta', contentIndex: thinking ? 1 : 0, delta: text, partial });
@@ -919,7 +1370,11 @@ test('TUI menu animates, advances timers and disappears after completion', async
   t.mock.timers.enable({ apis: ['setInterval', 'Date'], now: 1_000 });
   const h = harness(t, 'tui');
   assert.equal(h.widgets.size, 0); // No UI/timers during extension discovery.
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Explore the repository' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'Explore the repository' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
   const initial = screen(menu);
@@ -953,7 +1408,11 @@ test('headless orchestration stays independent of terminal UI', async (t) => {
 
 test('inline menu fits narrow widths, Unicode tasks and short terminals', async (t) => {
   const h = harness(t, 'tui');
-  await h.launch(Array.from({ length: 7 }, (_, i) => ({ prompt: `Task ${i} 日本語 👨‍👩‍👧‍👦 \x1b[31mcolors\x1b[0m\nmore` })));
+  await h.launch(
+    Array.from({ length: 7 }, (_, i) => ({
+      prompt: `Task ${i} 日本語 👨‍👩‍👧‍👦 \x1b[31mcolors\x1b[0m\nmore`,
+    })),
+  );
   await until(() => h.requests.length === 7);
   const menu = h.widgets.get('subagents.pi');
   for (const width of [0, 1, 2, 3, 8, 24, 80]) {
@@ -961,7 +1420,10 @@ test('inline menu fits narrow widths, Unicode tasks and short terminals', async 
       h.tui.terminal.rows = rows;
       menu.invalidate();
       const lines = menu.render(width);
-      assert.ok(lines.every((line) => visibleWidth(line) <= width), `width ${width}`);
+      assert.ok(
+        lines.every((line) => visibleWidth(line) <= width),
+        `width ${width}`,
+      );
       assert.ok(lines.length <= rows);
     }
   }
@@ -970,7 +1432,9 @@ test('inline menu fits narrow widths, Unicode tasks and short terminals', async 
 test('progress tracks only running tool IDs and names, not outputs or history', async (t) => {
   const h = harness(t, 'tui');
   let release;
-  const gate = new Promise((resolve) => { release = resolve; });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
   t.after(() => release());
   useChildTools(h, {
     slow_read: async (_id, _args, _signal, onUpdate) => {
@@ -979,10 +1443,14 @@ test('progress tracks only running tool IDs and names, not outputs or history', 
       return { content: [{ type: 'text', text: 'finished tool output' }], details: {} };
     },
   });
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Read a file' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'Read a file' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find(job => job.id === id);
+  const job = menu.actions.jobs().find((job) => job.id === id);
   h.requests[0].finish('', 'toolUse', {
     content: [{ type: 'toolCall', id: 'active-read', name: 'slow_read', arguments: {} }],
   });
@@ -1001,7 +1469,11 @@ test('progress tracks only running tool IDs and names, not outputs or history', 
 
 test('failed children disappear from the menu but remain available through status', async (t) => {
   const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'Fail safely' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'Fail safely' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('', 'error', { errorMessage: 'test failure' });
   await until(() => h.notifications.length === 1);
@@ -1016,7 +1488,9 @@ test('a broken UI observer cannot fail the child agent or produce repeated obser
   await h.launch([{ prompt: 'keep working even if UI fails' }]);
   await until(() => h.requests.length === 1);
   const logged = t.mock.method(console, 'error', () => {});
-  t.mock.method(h.tui, 'requestRender', () => { throw new Error('disposed renderer'); });
+  t.mock.method(h.tui, 'requestRender', () => {
+    throw new Error('disposed renderer');
+  });
   streamPartial(h.requests[0], 'still working');
   await until(() => logged.mock.callCount() === 1);
   h.requests[0].finish('successful answer');
@@ -1051,7 +1525,11 @@ test('history is bounded without evicting running agents, and the menu retains t
   await until(() => h.requests.length === 1);
   h.requests[0].finish('older answer');
   await until(() => h.notifications.length === 1);
-  const { details: { ids: [runningId] } } = await h.launch([{ prompt: 'keep this child running' }]);
+  const {
+    details: {
+      ids: [runningId],
+    },
+  } = await h.launch([{ prompt: 'keep this child running' }]);
   await until(() => h.requests.length === 2);
   const menu = h.widgets.get('subagents.pi');
   for (let i = 0; i < 24; i++) {
@@ -1067,28 +1545,42 @@ test('history is bounded without evicting running agents, and the menu retains t
   assert.equal(retained.length, 21);
   assert.equal(retained.find((job) => job.id === runningId).status, 'running');
   assert.ok(!retained.some((job) => job.prompt === 'older finished child'));
-  await assert.rejects(h.launch([{ name: 'older-finished-child', prompt: 'must not reuse evicted name' }]), /name already used/);
+  await assert.rejects(
+    h.launch([{ name: 'older-finished-child', prompt: 'must not reuse evicted name' }]),
+    /name already used/,
+  );
 });
 
 test('bounded history evicts in completion order even when timestamps tie', async (t) => {
   t.mock.timers.enable({ apis: ['Date'], now: 1000 });
   const h = harness(t, 'tui');
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'oldest finished child' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'oldest finished child' }]);
   await until(() => h.requests.length === 1);
   const menu = h.widgets.get('subagents.pi');
-  const job = menu.actions.jobs().find(job => job.id === id);
+  const job = menu.actions.jobs().find((job) => job.id === id);
   h.requests[0].finish('Oldest answer');
   await until(() => h.notifications.length === 1);
   const completed = [];
   for (let i = 0; i < 21; i++) {
-    const { details: { ids: [nextId] } } = await h.launch([{ prompt: `new child ${i}` }]);
+    const {
+      details: {
+        ids: [nextId],
+      },
+    } = await h.launch([{ prompt: `new child ${i}` }]);
     completed.push(nextId);
     await until(() => h.requests.length === i + 2);
     h.requests[i + 1].finish('new answer');
     await until(() => h.notifications.length === i + 2);
   }
   const retained = (await h.call('subagents_status', {})).structuredContent.agents;
-  assert.deepEqual(retained.map(job => job.id), completed.slice(1));
+  assert.deepEqual(
+    retained.map((job) => job.id),
+    completed.slice(1),
+  );
   await assert.rejects(h.call('subagents_status', { id }), /Unknown or no longer retained/);
   assert.equal(job.session, undefined);
   assert.equal(job.unsubscribe, undefined);
@@ -1103,8 +1595,12 @@ test('pending artifact delivery cannot be pruned or leak a notification into a n
   let written;
   let blocked = false;
   const directories = [];
-  const gate = new Promise((resolve) => { release = resolve; });
-  const fileWritten = new Promise((resolve) => { written = resolve; });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const fileWritten = new Promise((resolve) => {
+    written = resolve;
+  });
   fsPromises.mkdtemp = async (...args) => {
     blocked = true;
     await gate;
@@ -1112,7 +1608,11 @@ test('pending artifact delivery cannot be pruned or leak a notification into a n
     directories.push(directory);
     return directory;
   };
-  fsPromises.writeFile = async (...args) => { const result = await originalWrite(...args); written(); return result; };
+  fsPromises.writeFile = async (...args) => {
+    const result = await originalWrite(...args);
+    written();
+    return result;
+  };
   syncBuiltinESMExports();
   try {
     await h.launch([{ prompt: 'delayed large response' }]);
@@ -1150,13 +1650,19 @@ test('pending artifact delivery cannot be pruned or leak a notification into a n
 
 test('launch returns machine-readable IDs mapped to task prompts and selected models', async (t) => {
   const h = harness(t);
-  const output = await h.launch([{ prompt: 'research' }, { prompt: 'tests', model: childModel.id, provider: childModel.provider }]);
+  const output = await h.launch([
+    { prompt: 'research' },
+    { prompt: 'tests', model: childModel.id, provider: childModel.provider },
+  ]);
   assert.deepEqual(output.structuredContent.ids, output.details.ids);
   const agents = output.structuredContent.agents;
-  assert.deepEqual(agents.map((a) => [a.id, a.prompt, a.model, a.provider, a.status]), [
-    [output.details.ids[0], 'research', parentModel.id, parentModel.provider, 'running'],
-    [output.details.ids[1], 'tests', childModel.id, childModel.provider, 'running'],
-  ]);
+  assert.deepEqual(
+    agents.map((a) => [a.id, a.prompt, a.model, a.provider, a.status]),
+    [
+      [output.details.ids[0], 'research', parentModel.id, parentModel.provider, 'running'],
+      [output.details.ids[1], 'tests', childModel.id, childModel.provider, 'running'],
+    ],
+  );
   assert.ok(agents.every((a) => a.result === null && a.notification === 'pending'));
   await until(() => h.requests.length === 2);
   h.requests.forEach((request) => request.finish('done'));
@@ -1166,7 +1672,11 @@ test('launch returns machine-readable IDs mapped to task prompts and selected mo
 test('status is nonblocking, tracks queued guidance, and only includes a report for an explicit ID', async (t) => {
   const h = harness(t);
   assert.deepEqual((await h.call('subagents_status', {})).structuredContent, { agents: [] });
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'inspect state' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'inspect state' }]);
   await until(() => h.requests.length === 1);
   const steered = await h.steer(id, 'additional guidance');
   assert.equal(steered.structuredContent.accepted, true);
@@ -1178,7 +1688,10 @@ test('status is nonblocking, tracks queued guidance, and only includes a report 
   assert.equal(h.requests.length, 1); // Inspection makes no provider call and never waits for completion.
   h.requests[0].finish('initial answer');
   await until(() => h.requests.length === 2);
-  assert.equal((await h.call('subagents_status', { id })).structuredContent.agents[0].pendingSteers, 0);
+  assert.equal(
+    (await h.call('subagents_status', { id })).structuredContent.agents[0].pendingSteers,
+    0,
+  );
   h.requests[1].finish('final retrieved report');
   await until(() => h.notifications.length === 1);
   const list = (await h.call('subagents_status', {})).structuredContent.agents;
@@ -1199,8 +1712,15 @@ test('status is nonblocking, tracks queued guidance, and only includes a report 
 
 test('status rejects missing/stale IDs and cancellation and clears at session boundaries', async (t) => {
   const h = harness(t);
-  await assert.rejects(h.call('subagents_status', { id: 'unknown' }), /Unknown or no longer retained/);
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'old session' }]);
+  await assert.rejects(
+    h.call('subagents_status', { id: 'unknown' }),
+    /Unknown or no longer retained/,
+  );
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'old session' }]);
   await until(() => h.requests.length === 1);
   await assert.rejects(h.call('subagents_status', { id }, AbortSignal.abort()), /abort/i);
   await h.events.get('session_tree')();
@@ -1211,8 +1731,14 @@ test('status rejects missing/stale IDs and cancellation and clears at session bo
 test('a failed notification enqueue retains the completed report for status and late steering', async (t) => {
   const h = harness(t);
   const logged = t.mock.method(console, 'error', () => {});
-  h.pi.sendMessage = () => { throw new Error('synthetic enqueue failure'); };
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'recover report' }]);
+  h.pi.sendMessage = () => {
+    throw new Error('synthetic enqueue failure');
+  };
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'recover report' }]);
   await until(() => h.requests.length === 1);
   h.requests[0].finish('important child findings');
   await until(() => logged.mock.callCount() === 1);
@@ -1224,7 +1750,10 @@ test('a failed notification enqueue retains the completed report for status and 
   const waited = (await h.call('subagents_wait', { ids: [id] })).structuredContent;
   assert.equal(waited.timedOut, false);
   assert.deepEqual(waited.agents, [job]);
-  assert.match((await h.steer(id, 'late guidance')).structuredContent.agent.result, /important child findings/);
+  assert.match(
+    (await h.steer(id, 'late guidance')).structuredContent.agent.result,
+    /important child findings/,
+  );
   assert.equal(h.requests.length, 1);
   assert.equal(h.notifications.length, 0);
 });
@@ -1235,32 +1764,66 @@ test('completion reaches a real busy parent Agent on its next turn, after all si
   let releaseSibling;
   let parentToolStarted = false;
   let siblingStarted = false;
-  const gate = new Promise((resolve) => { release = resolve; });
-  const siblingGate = new Promise((resolve) => { releaseSibling = resolve; });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const siblingGate = new Promise((resolve) => {
+    releaseSibling = resolve;
+  });
   const parent = new Agent({
     initialState: {
-      model: parentModel, systemPrompt: 'Parent test',
-      tools: [{ name: 'slow_read', label: 'Read', description: 'Controlled tool', parameters: {
-        type: 'object', properties: { sibling: { type: 'boolean' } }, required: ['sibling'],
-      },
-        async execute(_id, args) {
-          if (args.sibling) { siblingStarted = true; await siblingGate; }
-          else { parentToolStarted = true; await gate; }
-          return { content: [{ type: 'text', text: 'parent tool finished' }], details: undefined };
-        } }],
+      model: parentModel,
+      systemPrompt: 'Parent test',
+      tools: [
+        {
+          name: 'slow_read',
+          label: 'Read',
+          description: 'Controlled tool',
+          parameters: {
+            type: 'object',
+            properties: { sibling: { type: 'boolean' } },
+            required: ['sibling'],
+          },
+          async execute(_id, args) {
+            if (args.sibling) {
+              siblingStarted = true;
+              await siblingGate;
+            } else {
+              parentToolStarted = true;
+              await gate;
+            }
+            return {
+              content: [{ type: 'text', text: 'parent tool finished' }],
+              details: undefined,
+            };
+          },
+        },
+      ],
     },
-    streamFn: (model, context, options) => h.ctx.modelRegistry.streamSimple(model, context, options),
+    streamFn: (model, context, options) =>
+      h.ctx.modelRegistry.streamSimple(model, context, options),
     // Match Pi custom-message conversion without booting another UI/session.
-    convertToLlm: (messages) => messages.map((message) => message.role === 'custom'
-      ? { role: 'user', content: message.content, timestamp: message.timestamp } : message),
+    convertToLlm: (messages) =>
+      messages.map((message) =>
+        message.role === 'custom'
+          ? { role: 'user', content: message.content, timestamp: message.timestamp }
+          : message,
+      ),
   });
-  t.after(async () => { release(); releaseSibling(); parent.abort(); await parent.waitForIdle(); });
+  t.after(async () => {
+    release();
+    releaseSibling();
+    parent.abort();
+    await parent.waitForIdle();
+  });
   const running = parent.prompt('Keep doing useful work');
   await until(() => h.requests.length === 1);
-  h.requests[0].finish('', 'toolUse', { content: [
-    { type: 'toolCall', id: 'slow', name: 'slow_read', arguments: { sibling: false } },
-    { type: 'toolCall', id: 'sibling', name: 'slow_read', arguments: { sibling: true } },
-  ] });
+  h.requests[0].finish('', 'toolUse', {
+    content: [
+      { type: 'toolCall', id: 'slow', name: 'slow_read', arguments: { sibling: false } },
+      { type: 'toolCall', id: 'sibling', name: 'slow_read', arguments: { sibling: true } },
+    ],
+  });
   await until(() => parentToolStarted);
   h.pi.sendMessage = (message, options) => {
     h.notifications.push({ message, options });
@@ -1283,8 +1846,13 @@ test('completion reaches a real busy parent Agent on its next turn, after all si
   const next = h.requests[2].context.messages;
   assert.equal(next.filter((m) => m.role === 'toolResult').length, 2);
   const toolIndex = next.findLastIndex((m) => m.role === 'toolResult');
-  const completionIndex = next.findIndex((m) => m.role === 'user' && String(m.content).includes('USE THESE FINDINGS'));
-  assert.ok(toolIndex >= 0 && completionIndex > toolIndex, 'completion must arrive after tool results, before the next parent request');
+  const completionIndex = next.findIndex(
+    (m) => m.role === 'user' && String(m.content).includes('USE THESE FINDINGS'),
+  );
+  assert.ok(
+    toolIndex >= 0 && completionIndex > toolIndex,
+    'completion must arrive after tool results, before the next parent request',
+  );
   h.requests[2].finish('Parent incorporated child findings');
   await running;
   assert.equal(h.requests.length, 3); // No redundant post-final follow-up request.
@@ -1294,19 +1862,43 @@ test('completion reaches a real busy parent Agent on its next turn, after all si
 for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
   test(`inline menu integrates with real ${Renderer.name} rendering, input, resize and parent focus`, async (t) => {
     const terminal = {
-      columns: 100, rows: 32, kittyProtocolActive: false,
-      start(input, resize) { this.input = input; this.resize = resize; },
-      stop() {}, write() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {},
-      clearScreen() {}, moveBy() {}, setTitle() {}, setProgress() {}, setProgramStatus() {},
+      columns: 100,
+      rows: 32,
+      kittyProtocolActive: false,
+      start(input, resize) {
+        this.input = input;
+        this.resize = resize;
+      },
+      stop() {},
+      write() {},
+      hideCursor() {},
+      showCursor() {},
+      clearLine() {},
+      clearFromCursor() {},
+      clearScreen() {},
+      moveBy() {},
+      setTitle() {},
+      setProgress() {},
+      setProgramStatus() {},
     };
     const renderer = new Renderer(terminal);
     const h = harness(t, 'tui', renderer);
     t.after(() => renderer.stop());
     const plain = (text) => text;
-    const editor = new CustomEditor(renderer, {
-      borderColor: plain,
-      selectList: { selectedPrefix: plain, selectedText: plain, description: plain, scrollInfo: plain, noMatch: plain },
-    }, new KeybindingsManager(TUI_KEYBINDINGS));
+    const editor = new CustomEditor(
+      renderer,
+      {
+        borderColor: plain,
+        selectList: {
+          selectedPrefix: plain,
+          selectedText: plain,
+          description: plain,
+          scrollInfo: plain,
+          noMatch: plain,
+        },
+      },
+      new KeybindingsManager(TUI_KEYBINDINGS),
+    );
     const submitted = [];
     editor.onSubmit = (text) => submitted.push(text);
     h.ctx.ui.getEditorText = () => editor.getText();
@@ -1314,9 +1906,16 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     renderer.addChild(editor);
     renderer.setFocus(editor);
     renderer.start();
-    const rendered = () => (renderer instanceof TuiAltScreen ? renderer.getScreenLines()
-      : renderer.captureRenderState().previousLines).map(stripTerminalSequences).join('\n');
-    const { details: { ids } } = await h.launch([
+    const rendered = () =>
+      (renderer instanceof TuiAltScreen
+        ? renderer.getScreenLines()
+        : renderer.captureRenderState().previousLines
+      )
+        .map(stripTerminalSequences)
+        .join('\n');
+    const {
+      details: { ids },
+    } = await h.launch([
       { name: 'first-child', prompt: 'Private first assignment' },
       { name: 'second-child', prompt: 'Private second assignment' },
     ]);
@@ -1347,7 +1946,11 @@ for (const Renderer of [TuiAltScreen, TuiMainScreen]) {
     terminal.rows = 18;
     terminal.resize();
     renderer.renderNow(true);
-    assert.ok(rendered().split('\n').every((line) => visibleWidth(line) <= 48));
+    assert.ok(
+      rendered()
+        .split('\n')
+        .every((line) => visibleWidth(line) <= 48),
+    );
     assert.match(rendered(), /Parent draft/);
     assert.match(rendered(), /second-child/);
     terminal.input('\r');
@@ -1384,10 +1987,15 @@ test('wait declares required unique IDs, bounded integer timeout and structured 
 
 test('wait returns a single report without waiting for unrelated jobs or changing notifications', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch([{ prompt: 'selected' }, { prompt: 'unrelated' }]);
+  const {
+    details: { ids },
+  } = await h.launch([{ prompt: 'selected' }, { prompt: 'unrelated' }]);
   await until(() => h.requests.length === 2);
   let resolved = false;
-  const waiting = h.call('subagents_wait', { ids: [ids[0]] }).then((result) => { resolved = true; return result; });
+  const waiting = h.call('subagents_wait', { ids: [ids[0]] }).then((result) => {
+    resolved = true;
+    return result;
+  });
   await setImmediate();
   assert.equal(resolved, false);
   assert.equal(h.requests.length, 2);
@@ -1403,7 +2011,10 @@ test('wait returns a single report without waiting for unrelated jobs or changin
   assert.match(job.result, /selected findings/);
   assert.match(output.content[0].text, /selected findings/);
   assert.equal(h.requests[1].options.signal.aborted, false);
-  assert.equal((await h.call('subagents_status', { id: ids[1] })).structuredContent.agents[0].status, 'running');
+  assert.equal(
+    (await h.call('subagents_status', { id: ids[1] })).structuredContent.agents[0].status,
+    'running',
+  );
   assert.equal(h.notifications.length, 1);
   assert.equal(h.notifications[0].message.details.id, ids[0]);
   assert.deepEqual(h.notifications[0].options, { triggerTurn: true, deliverAs: 'steer' });
@@ -1414,11 +2025,16 @@ test('wait returns a single report without waiting for unrelated jobs or changin
 
 test('wait waits for ALL selected jobs, preserves requested order, and can recover already finished reports', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
+  const {
+    details: { ids },
+  } = await h.launch([{ prompt: 'first' }, { prompt: 'second' }]);
   await until(() => h.requests.length === 2);
   const requested = [ids[1], ids[0]];
   let resolved = false;
-  const waiting = h.call('subagents_wait', { ids: requested }).then((result) => { resolved = true; return result; });
+  const waiting = h.call('subagents_wait', { ids: requested }).then((result) => {
+    resolved = true;
+    return result;
+  });
   h.requests[1].finish('second result');
   await until(() => h.notifications.length === 1);
   await setImmediate();
@@ -1426,12 +2042,22 @@ test('wait waits for ALL selected jobs, preserves requested order, and can recov
   h.requests[0].finish('first result');
   const { structuredContent } = await waiting;
   assert.equal(structuredContent.timedOut, false);
-  assert.deepEqual(structuredContent.agents.map((job) => job.id), requested);
-  assert.ok(structuredContent.agents.every((job) => job.status === 'completed' && job.notification === 'queued'));
+  assert.deepEqual(
+    structuredContent.agents.map((job) => job.id),
+    requested,
+  );
+  assert.ok(
+    structuredContent.agents.every(
+      (job) => job.status === 'completed' && job.notification === 'queued',
+    ),
+  );
   assert.match(structuredContent.agents[0].result, /second result/);
   assert.match(structuredContent.agents[1].result, /first result/);
   for (const timeoutMs of [undefined, 1, 2_147_483_647]) {
-    assert.deepEqual((await h.call('subagents_wait', { ids: requested, timeoutMs })).structuredContent, structuredContent);
+    assert.deepEqual(
+      (await h.call('subagents_wait', { ids: requested, timeoutMs })).structuredContent,
+      structuredContent,
+    );
   }
   assert.equal(h.notifications.length, 2);
   assert.equal(h.requests.length, 2);
@@ -1440,7 +2066,9 @@ test('wait waits for ALL selected jobs, preserves requested order, and can recov
 for (const stopReason of ['error', 'aborted']) {
   test(`wait treats provider ${stopReason} as finished and returns the failure report`, async (t) => {
     const h = harness(t);
-    const { details: { ids } } = await h.launch([{ prompt: 'will fail' }]);
+    const {
+      details: { ids },
+    } = await h.launch([{ prompt: 'will fail' }]);
     await until(() => h.requests.length === 1);
     const waiting = h.call('subagents_wait', { ids });
     h.requests[0].finish('partial findings', stopReason, { errorMessage: 'provider unavailable' });
@@ -1456,14 +2084,22 @@ for (const stopReason of ['error', 'aborted']) {
 
 test('wait timeout returns completed and running snapshots without stopping children', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch([{ prompt: 'quick' }, { prompt: 'slow' }]);
+  const {
+    details: { ids },
+  } = await h.launch([{ prompt: 'quick' }, { prompt: 'slow' }]);
   await until(() => h.requests.length === 2);
   h.requests[0].finish('quick result');
   await h.call('subagents_wait', { ids: [ids[0]] });
   const { structuredContent: result } = await h.call('subagents_wait', { ids, timeoutMs: 1 });
   assert.equal(result.timedOut, true);
-  assert.deepEqual(result.agents.map((job) => job.id), ids);
-  assert.deepEqual(result.agents.map((job) => job.status), ['completed', 'running']);
+  assert.deepEqual(
+    result.agents.map((job) => job.id),
+    ids,
+  );
+  assert.deepEqual(
+    result.agents.map((job) => job.status),
+    ['completed', 'running'],
+  );
   assert.match(result.agents[0].result, /quick result/);
   assert.equal(result.agents[1].result, null);
   assert.equal(h.requests[1].options.signal.aborted, false);
@@ -1477,7 +2113,9 @@ test('wait timeout returns completed and running snapshots without stopping chil
 
 test('aborting one wait rejects promptly without stopping jobs or another wait', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch([{ prompt: 'keep working' }]);
+  const {
+    details: { ids },
+  } = await h.launch([{ prompt: 'keep working' }]);
   await until(() => h.requests.length === 1);
   await assert.rejects(h.call('subagents_wait', { ids }, AbortSignal.abort()), /abort/i);
   const controller = new AbortController();
@@ -1498,18 +2136,28 @@ test('aborting one wait rejects promptly without stopping jobs or another wait',
 
 test('wait rejects empty, duplicate, inexact, unknown and malformed IDs and invalid timeouts', async (t) => {
   const h = harness(t);
-  const { details: { ids: [id] } } = await h.launch([{ prompt: 'valid retained job' }]);
+  const {
+    details: {
+      ids: [id],
+    },
+  } = await h.launch([{ prompt: 'valid retained job' }]);
   await until(() => h.requests.length === 1);
   await assert.rejects(h.call('subagents_wait', { ids: [] }), /At least one/);
   await assert.rejects(h.call('subagents_wait', { ids: [id, id] }), /unique/);
   for (const badId of ['', ' ', 'unknown', id.slice(0, 8), ` ${id}`, `${id} `, null, 123]) {
-    await assert.rejects(h.call('subagents_wait', { ids: [id, badId] }), /Unknown or no longer retained/);
+    await assert.rejects(
+      h.call('subagents_wait', { ids: [id, badId] }),
+      /Unknown or no longer retained/,
+    );
   }
   for (const params of [{}, { ids: null }, { ids: id }, { ids: 12 }]) {
     await assert.rejects(h.call('subagents_wait', params));
   }
   for (const timeoutMs of [0, -1, 1.5, 2_147_483_648, NaN, Infinity, '1', null, true]) {
-    await assert.rejects(h.call('subagents_wait', { ids: [id], timeoutMs }), /integer between 1 and 2147483647/);
+    await assert.rejects(
+      h.call('subagents_wait', { ids: [id], timeoutMs }),
+      /integer between 1 and 2147483647/,
+    );
   }
   assert.equal(h.requests.length, 1);
   assert.equal(h.requests[0].options.signal.aborted, false);
@@ -1523,7 +2171,9 @@ for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
     const h = harness(t);
     let release;
     let childSignal;
-    const gate = new Promise((resolve) => { release = resolve; });
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
     useChildTools(h, {
       slow_read: async (_id, _args, signal) => {
         childSignal = signal;
@@ -1531,17 +2181,28 @@ for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
         return { content: [{ type: 'text', text: 'released' }], details: {} };
       },
     });
-    const { details: { ids } } = await h.launch([{ prompt: 'blocked child tool' }]);
+    const {
+      details: { ids },
+    } = await h.launch([{ prompt: 'blocked child tool' }]);
     await until(() => h.requests.length === 1);
     h.requests[0].finish('', 'toolUse', {
-      content: [{ type: 'toolCall', id: 'blocked', name: 'slow_read', arguments: { path: 'slow.ts' } }],
+      content: [
+        { type: 'toolCall', id: 'blocked', name: 'slow_read', arguments: { path: 'slow.ts' } },
+      ],
     });
     await until(() => childSignal);
     let rejected = false;
-    const waiting = assert.rejects(h.call('subagents_wait', { ids }), /session changed or shut down/)
-      .then(() => { rejected = true; });
+    const waiting = assert
+      .rejects(h.call('subagents_wait', { ids }), /session changed or shut down/)
+      .then(() => {
+        rejected = true;
+      });
     let cleaned = false;
-    const cleanup = h.events.get(event)().then(() => { cleaned = true; });
+    const cleanup = h.events
+      .get(event)()
+      .then(() => {
+        cleaned = true;
+      });
     try {
       await until(() => rejected);
       assert.equal(cleaned, false);
@@ -1559,10 +2220,15 @@ for (const event of ['session_shutdown', 'session_start', 'session_tree']) {
 
 test('an in-flight wait retains selected jobs even after finished-history pruning', async (t) => {
   const h = harness(t);
-  const { details: { ids } } = await h.launch(Array.from({ length: 23 }, (_, i) => ({ prompt: `job ${i}` })));
+  const {
+    details: { ids },
+  } = await h.launch(Array.from({ length: 23 }, (_, i) => ({ prompt: `job ${i}` })));
   await until(() => h.requests.length === ids.length);
   let resolved = false;
-  const waiting = h.call('subagents_wait', { ids }).then((result) => { resolved = true; return result; });
+  const waiting = h.call('subagents_wait', { ids }).then((result) => {
+    resolved = true;
+    return result;
+  });
   for (let i = 0; i < 22; i++) {
     h.requests[i].finish(`result ${i}`);
     await until(() => h.notifications.length === i + 1);
@@ -1572,11 +2238,17 @@ test('an in-flight wait retains selected jobs even after finished-history prunin
   const retained = (await h.call('subagents_status', {})).structuredContent.agents;
   assert.equal(retained.length, 21); // Latest 20 finished plus the last running job.
   assert.ok(!retained.some((job) => job.id === ids[0]));
-  await assert.rejects(h.call('subagents_wait', { ids: [ids[0]] }), /Unknown or no longer retained/);
+  await assert.rejects(
+    h.call('subagents_wait', { ids: [ids[0]] }),
+    /Unknown or no longer retained/,
+  );
   h.requests[22].finish('result 22');
   const { structuredContent: result } = await waiting;
   assert.equal(result.timedOut, false);
-  assert.deepEqual(result.agents.map((job) => job.id), ids);
+  assert.deepEqual(
+    result.agents.map((job) => job.id),
+    ids,
+  );
   result.agents.forEach((job, i) => {
     assert.equal(job.status, 'completed');
     assert.ok(job.result.endsWith(`result ${i}`));
@@ -1591,7 +2263,9 @@ test('wait remains pending through report artifact preparation and returns the f
   let release;
   let blocked = false;
   let path;
-  const gate = new Promise((resolve) => { release = resolve; });
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
   fsPromises.writeFile = async (...args) => {
     path = args[0];
     blocked = true;
@@ -1600,10 +2274,15 @@ test('wait remains pending through report artifact preparation and returns the f
   };
   syncBuiltinESMExports();
   try {
-    const { details: { ids } } = await h.launch([{ prompt: 'large report' }]);
+    const {
+      details: { ids },
+    } = await h.launch([{ prompt: 'large report' }]);
     await until(() => h.requests.length === 1);
     let resolved = false;
-    const waiting = h.call('subagents_wait', { ids }).then((result) => { resolved = true; return result; });
+    const waiting = h.call('subagents_wait', { ids }).then((result) => {
+      resolved = true;
+      return result;
+    });
     const answer = 'large report content\n'.repeat(3000);
     h.requests[0].finish(answer);
     await until(() => blocked);
@@ -1615,7 +2294,10 @@ test('wait remains pending through report artifact preparation and returns the f
     assert.equal(pending.agents[0].status, 'completed');
     assert.equal(pending.agents[0].notification, 'pending');
     assert.match(pending.agents[0].result, /preparing full response file/);
-    await assert.rejects(h.call('subagents_discard', { ids }), /has not finished execution and report preparation/);
+    await assert.rejects(
+      h.call('subagents_discard', { ids }),
+      /has not finished execution and report preparation/,
+    );
     release();
     const { structuredContent: result } = await waiting;
     assert.equal(result.timedOut, false);
