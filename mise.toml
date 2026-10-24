@@ -6,50 +6,50 @@ relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
 
-[tasks.apply]
+[tasks."dots:apply"]
 description = "Apply the dotfiles with mise"
 dir = "{{ config_root }}"
 run = "mise dotfiles apply"
 
-[tasks.setup]
+[tasks."boot:apply"]
 description = "Set up the machine from the repo's mise config"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 raw = true
 run = "mise bootstrap"
 
-[tasks.preview]
+[tasks."boot:preview"]
 description = "Preview the machine setup without applying it"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap --dry-run"
 
-[tasks.status]
+[tasks."boot:status"]
 description = "Show the state of the configured machine setup"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap status"
 
-[tasks.diff]
+[tasks."dots:diff"]
 description = "Show the changes applying dotfiles would make"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise dotfiles diff"
 
-[tasks."install:pi"]
+[tasks."pi:install"]
 description = "Install Pi dependencies from the npm lockfile"
 dir = "{{ config_root }}/home/.pi"
 raw = true
 run = "npm ci"
 
-[tasks."restart:macos"]
+[tasks."macos:restart"]
 description = "Restart Dock, Finder, and the menu bar to reload preferences"
 dir = "{{ config_root }}"
 confirm = { message = "Restart Dock, Finder, and the menu bar?", default = "no" }
 raw = true
 run = "killall Dock Finder SystemUIServer"
 
-[tasks.format]
+[tasks."repo:format"]
 description = "Format the Neovim and Pi"
 dir = "{{ config_root }}"
 run = [
@@ -57,7 +57,7 @@ run = [
   "(cd home/.pi && ./node_modules/.bin/oxfmt .)",
 ]
 
-[tasks.lint]
+[tasks."repo:lint"]
 description = "Lint the Pi package with Oxlint"
 dir = "{{ config_root }}/home/.pi"
 run = "./node_modules/.bin/oxlint ."

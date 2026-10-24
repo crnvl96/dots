@@ -25,9 +25,6 @@ rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
 "npm:oxlint" = "latest"
 "npm:typescript" = "latest"
 
-[bootstrap.mise_shell_activate]
-zsh = true
-
 [bootstrap.packages]
 "brew:bat" = "latest"
 "brew:eza" = "latest"
@@ -39,8 +36,6 @@ zsh = true
 "brew:lua-language-server" = "latest"
 "brew:neovim" = "latest"
 "brew:ripgrep" = "latest"
-"brew:shellcheck" = "latest"
-"brew:shfmt" = "latest"
 "brew:stylua" = "latest"
 "brew:tree" = "latest"
 "brew:tree-sitter-cli" = "latest"

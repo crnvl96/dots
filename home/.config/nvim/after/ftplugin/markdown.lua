@@ -15,9 +15,9 @@ end
 vim.b.minisurround_config = {
   custom_surroundings = {
     -- Bold
-    ['*'] = { input = { '%*%*().-()%*%*' }, output = { left = '**', right = '**' } },
+    ['B'] = { input = { '%*%*().-()%*%*' }, output = { left = '**', right = '**' } },
     -- Italic
-    ['_'] = { input = { '%_().-()%_' }, output = { left = '_', right = '_' } },
+    ['I'] = { input = { '%_().-()%_' }, output = { left = '_', right = '_' } },
     -- Link
     L = {
       input = { '%[().-()%]%(.-%)' },

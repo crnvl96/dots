@@ -30,12 +30,24 @@ require('mini.snippets').setup({
   },
 })
 
--- Include hidden files in MiniPick's rg-backed file and grep searches.
+-- Include hidden files in MiniPick's rg-backed grep searches.
 vim.env.RIPGREP_CONFIG_PATH = vim.fn.stdpath('config') .. '/ripgreprc'
 require('mini.pick').setup()
 
+-- Use fd for files, including hidden files but excluding .git directories.
+MiniPick.registry.files = function()
+  return MiniPick.builtin.cli({
+    command = { 'fd', '--type=f', '--hidden', '--exclude=.git', '--color=never' },
+  }, {
+    source = {
+      name = 'Files (fd)',
+      show = function(buf_id, items, query) MiniPick.default_show(buf_id, items, query, { show_icons = true }) end,
+    },
+  })
+end
+
 -- stylua: ignore start
-vim.keymap.set('n', '<Leader>ff', '<Cmd>lua MiniPick.builtin.files()<CR>', { desc = 'Find files' })
+vim.keymap.set('n', '<Leader>ff', '<Cmd>Pick files<CR>', { desc = 'Find files' })
 vim.keymap.set('n', '<Leader>fg', '<Cmd>lua MiniPick.builtin.grep_live()<CR>', { desc = 'Live grep' })
 vim.keymap.set('n', '<Leader>fb', '<Cmd>lua MiniPick.builtin.buffers()<CR>', { desc = 'Find buffers' })
 vim.keymap.set('n', '<Leader>fh', '<Cmd>lua MiniPick.builtin.help()<CR>', { desc = 'Find help' })
