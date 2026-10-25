@@ -12,10 +12,7 @@
     },
     "inkdrop": {
       "command": "npx",
-      "args": [
-        "-y",
-        "@inkdropapp/mcp-server@latest"
-      ],
+      "args": ["-y", "@inkdropapp/mcp-server@latest"],
       "env": {
         "INKDROP_LOCAL_SERVER_URL": "http://localhost:19840",
         "INKDROP_LOCAL_USERNAME": "inkdrop",

@@ -10,9 +10,7 @@
   "showCacheMissNotices": true,
   "treeFilterMode": "no-tools",
   "defaultProjectTrust": "always",
-  "defaultTools": [
-    "+codemode"
-  ],
+  "defaultTools": ["+codemode"],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
   "extensions": [],
