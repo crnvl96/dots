@@ -6,11 +6,6 @@ relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
 
-[tasks.dots]
-description = "Apply the dotfiles with mise"
-dir = "{{ config_root }}"
-run = "mise dotfiles apply"
-
 [tasks.boot]
 description = "Set up the machine from the repo's mise config"
 dir = "{{ config_root }}"
@@ -29,12 +24,6 @@ description = "Show the state of the configured machine setup"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap status"
-
-[tasks."dots:diff"]
-description = "Show the changes applying dotfiles would make"
-dir = "{{ config_root }}"
-env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
-run = "mise dotfiles diff"
 
 [tasks."pi:install-deps"]
 description = "Install Pi dependencies from the npm lockfile"
