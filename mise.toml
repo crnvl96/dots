@@ -6,12 +6,12 @@ relative = true
 
 exclude = [".DS_Store", "node_modules", ".git"]
 
-[tasks."dots:apply"]
+[tasks.dots]
 description = "Apply the dotfiles with mise"
 dir = "{{ config_root }}"
 run = "mise dotfiles apply"
 
-[tasks."boot:apply"]
+[tasks.boot]
 description = "Set up the machine from the repo's mise config"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
@@ -36,28 +36,63 @@ dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise dotfiles diff"
 
-[tasks."pi:install"]
+[tasks."pi:install-deps"]
 description = "Install Pi dependencies from the npm lockfile"
 dir = "{{ config_root }}/home/.pi"
 raw = true
 run = "npm ci"
 
-[tasks."macos:restart"]
+[tasks."macos:restart-tools"]
 description = "Restart Dock, Finder, and the menu bar to reload preferences"
 dir = "{{ config_root }}"
 confirm = { message = "Restart Dock, Finder, and the menu bar?", default = "no" }
 raw = true
 run = "killall Dock Finder SystemUIServer"
 
-[tasks."repo:format"]
+[tasks."repo:check"]
 description = "Format the Neovim and Pi"
 dir = "{{ config_root }}"
 run = [
+  # format
   "(cd home/.config/nvim && stylua .)",
   "(cd home/.pi && ./node_modules/.bin/oxfmt .)",
+  # lint
+  "(cd home/.pi && ./node_modules/.bin/oxlint .)",
 ]
 
-[tasks."repo:lint"]
-description = "Lint the Pi package with Oxlint"
-dir = "{{ config_root }}/home/.pi"
-run = "./node_modules/.bin/oxlint ."
+[tasks."skills:link"]
+description = "Symlink each tracked skill file from .agents into .claude"
+dir = "{{ config_root }}"
+run = '''
+#!/usr/bin/env bash
+set -euo pipefail
+
+src_root="home/.agents/skills"
+dst_root="home/.claude/skills"
+
+git ls-files -z -- "$src_root" | while IFS= read -r -d '' src; do
+  rel="${src#"$src_root"/}"
+  case "$rel" in
+    .DS_Store|*/.DS_Store|node_modules/*|*/node_modules/*|.git/*|*/.git/*) continue ;;
+  esac
+
+  dest="$dst_root/$rel"
+  mkdir -p "$(dirname "$dest")"
+  target="$(python3 -c 'import os, sys; print(os.path.relpath(sys.argv[1], os.path.dirname(sys.argv[2])))' "$src" "$dest")"
+
+  if [[ -L "$dest" && "$(readlink "$dest")" == "$target" ]]; then
+    echo "$dest -> $target"
+    continue
+  fi
+  if [[ -e "$dest" && ! -L "$dest" ]]; then
+    echo "refuse: $dest exists and is not a symlink" >&2
+    exit 1
+  fi
+  if [[ -L "$dest" ]]; then
+    ln -sfn "$target" "$dest"
+  else
+    ln -s "$target" "$dest"
+  fi
+  echo "$dest -> $target"
+done
+'''
