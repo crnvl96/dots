@@ -1,0 +1,1 @@
+../../../.agents/skills/inkdrop-mermaid/SKILL.md
