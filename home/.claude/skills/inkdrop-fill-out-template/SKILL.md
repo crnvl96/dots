@@ -1,0 +1,1 @@
+../../../.agents/skills/inkdrop-fill-out-template/SKILL.md
