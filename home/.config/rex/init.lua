@@ -52,3 +52,49 @@ rex.bind("cmd+o", "pane.zoom")
 rex.bind("cmd+=", "pane.balance")
 rex.bind("cmd+f", "pane.go_to_directory")
 rex.bind("cmd+\\", "client.config.copy_path")
+
+local function open_split(ctx, command, direction)
+	local process, err = rex.block.call("com.superlogical.terminal", "process", { block_id = ctx.block_id })
+	if err then
+		error(err, 0)
+	end
+	local foreground = process.foreground or process.child
+
+	local split
+	split, err = rex.session.new_split({
+		anchor_id = ctx.block_id,
+		direction = direction,
+		side = "after",
+		focus = true,
+		layout = rex.layout.block({
+			flavor = "com.superlogical.terminal.shell",
+			label = command[1],
+			options = { command = command, cwd = foreground and foreground.cwd },
+		}),
+	})
+	if err then
+		error(err, 0)
+	end
+	return split
+end
+
+rex.action({
+	name = "lazygit",
+	title = "Open Lazygit",
+	description = "Open lazygit in a horizontal split below the current pane.",
+	run = function(ctx)
+		return open_split(ctx, { "lazygit" }, "vertical") -- Horizontal divider.
+	end,
+})
+
+rex.action({
+	name = "hunk",
+	title = "Open Hunk",
+	description = "Open hunk in a vertical split to the right of the current pane.",
+	run = function(ctx)
+		return open_split(ctx, { "hunk", "diff" }, "horizontal") -- Vertical divider.
+	end,
+})
+
+rex.bind("cmd+g", "lazygit")
+rex.bind("cmd+u", "hunk")
