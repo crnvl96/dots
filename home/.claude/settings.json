@@ -4,7 +4,20 @@
     "pr": "",
     "sessionUrl": false
   },
-  "model": "fable",
+  "model": "opus",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/bin/sh -c 'rex __internal session-start --agent claude 2>/dev/null || true'",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  },
   "statusLine": {
     "type": "command",
     "command": "~/.claude/statusline.sh",
@@ -21,18 +34,5 @@
   "promptSuggestionEnabled": false,
   "awaySummaryEnabled": false,
   "autoMemoryEnabled": false,
-  "theme": "auto",
-  "hooks": {
-    "SessionStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/bin/sh -c 'rex __internal session-start --agent claude 2>/dev/null || true'",
-            "timeout": 5
-          }
-        ]
-      }
-    ]
-  }
+  "theme": "auto"
 }

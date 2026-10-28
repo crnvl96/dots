@@ -35,6 +35,7 @@ vim.env.RIPGREP_CONFIG_PATH = vim.fn.stdpath('config') .. '/ripgreprc'
 require('mini.pick').setup()
 
 -- Use fd for files, including hidden files but excluding .git directories.
+---@diagnostic disable-next-line: duplicate-set-field
 MiniPick.registry.files = function()
   return MiniPick.builtin.cli({
     command = { 'fd', '--type=f', '--hidden', '--exclude=.git', '--color=never' },

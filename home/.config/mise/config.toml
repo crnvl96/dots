@@ -12,6 +12,7 @@ nv = "nvim"
 ls = "eza -l"
 la = "eza -la"
 cat = "bat"
+lzg= "lazygit"
 
 [tools]
 go = "1.27.2"

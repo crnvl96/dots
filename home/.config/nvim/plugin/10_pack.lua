@@ -23,15 +23,10 @@ vim.api.nvim_create_autocmd('PackChanged', {
 
 vim.pack.add({
   'https://github.com/nvim-mini/mini.nvim',
-  'https://github.com/tpope/vim-fugitive',
-  'https://github.com/esmuellert/codediff.nvim',
   'https://github.com/nvim-treesitter/nvim-treesitter',
   'https://github.com/nvim-treesitter/nvim-treesitter-textobjects',
   'https://github.com/neovim/nvim-lspconfig',
   'https://github.com/stevearc/conform.nvim',
   'https://github.com/saghen/blink.lib',
   'https://github.com/saghen/blink.cmp',
-  'https://github.com/meanderingprogrammer/render-markdown.nvim',
-  'https://github.com/coder/claudecode.nvim',
-  'https://github.com/folke/snacks.nvim',
 })

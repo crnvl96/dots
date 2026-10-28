@@ -96,9 +96,3 @@ vim.keymap.set('n', '<Leader>wx', '<C-w>x', { desc = 'Exchange current window' }
 vim.keymap.set('n', '<Leader>us', toggle_lua_scratch, { desc = 'Toggle Lua scratch buffer' })
 vim.keymap.set('n', '<Leader>uw', '<Cmd>setlocal wrap!<CR>', { desc = 'Toggle linewrap' })
 vim.keymap.set({ 'n', 'x' }, '<Leader>ul', copy_file_location, { desc = 'Copy file location' })
-
-vim.keymap.set('n', '<Leader>uc', function()
-  vim.cmd([[G add .]])
-  vim.cmd([[G commit --amend --no-edit]])
-  vim.cmd([[G push --force-with-lease]])
-end, { desc = 'Amend commit without changing message' })
