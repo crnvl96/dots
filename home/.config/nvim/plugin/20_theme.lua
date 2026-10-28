@@ -1,51 +1,15 @@
 -- Appearance
+--
+-- Inherit the host terminal palette. Ghostty already switches
+-- `light:Rose Pine Dawn,dark:Rose Pine` and answers OSC 10/11/4. Neovim sets
+-- 'background' from OSC 11, including after a DEC 2031 theme notification
+-- (CSI ? 997) and after resume. This file re-queries the whole palette then.
+-- It does not set 'background' or g:colors_name: a named scheme would be
+-- reloaded when Neovim updates 'background'.
 
-local timer, pending
+local debounce, reported, current, applied
 local stopped = false
-
--- Rosé Pine colors: https://rosepinetheme.com/palette
-local palettes = {
-  light = {
-    name = 'minihues-light',
-    colors = {
-      base = '#faf4ed',
-      surface = '#fffaf3',
-      overlay = '#f2e9e1',
-      muted = '#9893a5',
-      subtle = '#797593',
-      text = '#464261',
-      love = '#b4637a',
-      gold = '#ea9d34',
-      rose = '#d7827e',
-      pine = '#286983',
-      foam = '#56949f',
-      iris = '#907aa9',
-      highlight_low = '#f4ede8',
-      highlight_med = '#dfdad9',
-      highlight_high = '#cecacd',
-    },
-  },
-  dark = {
-    name = 'minihues-dark',
-    colors = {
-      base = '#191724',
-      surface = '#1f1d2e',
-      overlay = '#26233a',
-      muted = '#6e6a86',
-      subtle = '#908caa',
-      text = '#e0def4',
-      love = '#eb6f92',
-      gold = '#f6c177',
-      rose = '#ebbcba',
-      pine = '#31748f',
-      foam = '#9ccfd8',
-      iris = '#c4a7e7',
-      highlight_low = '#21202e',
-      highlight_med = '#403d52',
-      highlight_high = '#524f67',
-    },
-  },
-}
+local querying = false
 
 local function blend(fg, bg, alpha)
   local function channel(hex, i) return tonumber(hex:sub(i, i + 1), 16) end
@@ -53,120 +17,254 @@ local function blend(fg, bg, alpha)
   return string.format('#%02x%02x%02x', mix(2), mix(4), mix(6))
 end
 
--- Start from the generated MiniHues palette and swap in Rosé Pine colors.
+-- 0 black, 1 red, 2 green, 3 yellow, 4 blue, 5 magenta, 6 cyan, 8 bright black.
+-- surface, subtle, and the highlight steps are not in the terminal palette,
+-- so blend them from the background, foreground, black, and bright black.
+local function colors_from_terminal(bg, fg, ansi)
+  local black, bright_black = ansi[0], ansi[8]
+  return {
+    bg = bg,
+    fg = fg,
+    red = ansi[1],
+    green = ansi[2],
+    yellow = ansi[3],
+    blue = ansi[4],
+    magenta = ansi[5],
+    cyan = ansi[6],
+    muted = bright_black,
+    subtle = blend(fg, bright_black, 0.35),
+    surface = blend(black, bg, 0.45),
+    highlight_low = blend(bright_black, bg, 0.12),
+    highlight_med = blend(bright_black, bg, 0.35),
+  }
+end
+
+-- Start from the generated MiniHues palette and swap in terminal colors.
 -- Diff and other tinted backgrounds blend the accent into the base.
 local function make_palette(c)
   local p = require('mini.hues').make_palette({
-    background = c.base,
-    foreground = c.text,
+    background = c.bg,
+    foreground = c.fg,
   })
 
+  -- MiniHues has more hue names than ANSI slots. Keep the existing assignment.
   local hues = {
-    red = c.love,
-    orange = c.rose,
-    yellow = c.gold,
-    green = c.foam,
-    cyan = c.foam,
-    azure = c.pine,
-    blue = c.pine,
-    purple = c.iris,
-    accent = c.iris,
+    red = c.red,
+    orange = c.cyan,
+    yellow = c.yellow,
+    green = c.blue,
+    cyan = c.blue,
+    azure = c.green,
+    blue = c.green,
+    purple = c.magenta,
+    accent = c.magenta,
   }
   for hue, color in pairs(hues) do
-    p[hue], p[hue .. '_bg'] = color, blend(color, c.base, 0.2)
+    p[hue], p[hue .. '_bg'] = color, blend(color, c.bg, 0.2)
   end
   p.bg_edge, p.bg_mid, p.bg_mid2 = c.surface, c.highlight_low, c.highlight_med
   p.fg_mid, p.fg_mid2 = c.subtle, c.muted
   return p
 end
 
--- Syntax roles follow rose-pine.nvim rather than MiniHues defaults.
+-- Syntax colors are terminal ANSI colors, not MiniHues' generated hues.
 local function highlights(c)
   return {
-    Boolean = { fg = c.rose },
-    Changed = { fg = c.rose },
+    Boolean = { fg = c.cyan },
+    Changed = { fg = c.cyan },
     Comment = { fg = c.muted, italic = true },
-    Constant = { fg = c.gold },
+    Constant = { fg = c.yellow },
     Delimiter = { fg = c.subtle },
-    Function = { fg = c.rose },
-    Identifier = { fg = c.text },
+    Function = { fg = c.cyan },
+    Identifier = { fg = c.fg },
     LineNr = { fg = c.muted },
     Operator = { fg = c.subtle },
-    PreProc = { fg = c.iris },
-    Special = { fg = c.foam },
-    Statement = { fg = c.pine, bold = true },
-    String = { fg = c.gold },
-    Type = { fg = c.foam },
-    diffChanged = { fg = c.rose },
-    ['@variable.builtin'] = { fg = c.love, bold = true },
-    ['@variable.member'] = { fg = c.foam },
-    ['@variable.parameter'] = { fg = c.iris, italic = true },
+    PreProc = { fg = c.magenta },
+    Special = { fg = c.blue },
+    Statement = { fg = c.green, bold = true },
+    String = { fg = c.yellow },
+    Type = { fg = c.blue },
+    diffChanged = { fg = c.cyan },
+    MiniPickMatchCurrent = { fg = c.cyan },
+    ['@variable.builtin'] = { fg = c.red, bold = true },
+    ['@variable.member'] = { fg = c.blue },
+    ['@variable.parameter'] = { fg = c.magenta, italic = true },
   }
 end
 
-local function observe(result)
-  if result.signal ~= 0 then return end
-  local stdout, stderr = vim.trim(result.stdout or ''), result.stderr or ''
-  if result.code == 0 then
-    if stdout == 'Dark' then return 'dark' end
-    if stdout == 'Light' then return 'light' end
-  elseif result.code == 1 and stdout == '' and stderr:find('AppleInterfaceStyle', 1, true) then
-    if stderr:find('Could not find key', 1, true) or stderr:find('does not exist', 1, true) then return 'light' end
-  end
+local function fingerprint(c)
+  return table.concat({
+    c.bg,
+    c.surface,
+    c.muted,
+    c.subtle,
+    c.fg,
+    c.red,
+    c.green,
+    c.yellow,
+    c.blue,
+    c.magenta,
+    c.cyan,
+    c.highlight_low,
+    c.highlight_med,
+  }, ',')
 end
 
-local function refresh()
-  if stopped or not timer or pending then return end
-  local ok, process = pcall(
-    vim.system,
-    { '/usr/bin/defaults', 'read', '-g', 'AppleInterfaceStyle' },
-    { text = true, timeout = 1000, env = { LC_ALL = 'C' } },
-    vim.schedule_wrap(function(result)
-      pending = nil
-      if stopped then return end
-      local appearance = observe(result)
-      local theme = palettes[appearance]
-      if not theme or vim.g.colors_name == theme.name then return end
-      -- Avoid reloading the old colorscheme when changing 'background'. Restore
-      -- its name so MiniHues still clears the old highlights when applying.
-      local previous = vim.g.colors_name
-      vim.g.colors_name = nil
-      vim.o.background = appearance
-      vim.g.colors_name = previous
-      require('mini.hues').apply_palette(make_palette(theme.colors))
-      for group, spec in pairs(highlights(theme.colors)) do
-        vim.api.nvim_set_hl(0, group, spec)
-      end
-      require('mini.colors').setup()
-      local cs = require('mini.colors').get_colorscheme()
-      cs:add_transparency({
-        float = true,
-        statuscolumn = true,
-        statusline = true,
-        tabline = true,
-        winbar = true,
-      }):apply()
-      vim.g.colors_name = theme.name
+local function apply(c, force)
+  if stopped then return end
+  -- A repeated palette still finishes the query. Otherwise 'background'
+  -- changes stop restoring highlights while a no-op reply is in flight.
+  querying = false
+  local id = fingerprint(c)
+  if not force and id == applied then return end
+  -- apply_palette clears an existing scheme only when g:colors_name is set.
+  -- Clear here, then leave the name unset so Neovim's 'background' update
+  -- does not try to reload a colorscheme.
+  vim.cmd('highlight clear')
+  vim.g.colors_name = nil
+  require('mini.hues').apply_palette(make_palette(c))
+  for group, spec in pairs(highlights(c)) do
+    vim.api.nvim_set_hl(0, group, spec)
+  end
+  require('mini.colors').setup()
+  local cs = require('mini.colors').get_colorscheme()
+  cs:add_transparency({
+    float = true,
+    statuscolumn = true,
+    statusline = true,
+    tabline = true,
+    winbar = true,
+  }):apply()
+  vim.g.colors_name = nil
+  applied = id
+  current = c
+end
+
+local function ready(t)
+  if not t.bg or not t.fg then return false end
+  for i = 0, 15 do
+    if not t[i] then return false end
+  end
+  return true
+end
+
+local function schedule_apply()
+  if stopped or not ready(reported) then return end
+  debounce:start(
+    80,
+    0,
+    vim.schedule_wrap(function()
+      if stopped or not ready(reported) then return end
+      apply(colors_from_terminal(reported.bg, reported.fg, reported))
     end)
   )
-  if ok then pending = process end
 end
 
-if stopped or timer or vim.fn.has('macunix') ~= 1 then return end
+local function channel(hex)
+  if not hex or #hex == 0 or #hex > 4 or not hex:match('^%x+$') then return nil end
+  local value = tonumber(hex, 16)
+  local max = tonumber(string.rep('f', #hex), 16)
+  if not value or not max or max == 0 then return nil end
+  return math.floor(value / max * 255 + 0.5)
+end
 
-timer = assert(vim.uv.new_timer())
+local function hex_color(r, g, b)
+  local rr, gg, bb = channel(r), channel(g), channel(b)
+  if not rr or not gg or not bb then return nil end
+  return string.format('#%02x%02x%02x', rr, gg, bb)
+end
+
+local function parse_spec(spec)
+  local r, g, b = spec:match('^[rR][gG][bB]:(%x+)/(%x+)/(%x+)')
+  if not r then
+    r, g, b = spec:match('^[rR][gG][bB][aA]:(%x+)/(%x+)/(%x+)/%x+')
+  end
+  if not r then return nil end
+  return hex_color(r, g, b)
+end
+
+local function parse(seq)
+  seq = seq:gsub('\027\\$', ''):gsub('\007$', '')
+  local which, spec = seq:match('^\027%]1([01]);(.+)$')
+  if which then
+    local color = parse_spec(spec)
+    if which == '0' then return 'fg', color end
+    return 'bg', color
+  end
+  local idx, body = seq:match('^\027%]4;(%d+);(.+)$')
+  idx = tonumber(idx)
+  if idx and idx >= 0 and idx <= 15 then return idx, parse_spec(body) end
+end
+
+local query_id = 0
+
+local function query()
+  if stopped then return end
+  query_id = query_id + 1
+  local id = query_id
+  querying = true
+  reported = {}
+  local parts = { '\027]10;?\007', '\027]11;?\007' }
+  for i = 0, 15 do
+    parts[#parts + 1] = string.format('\027]4;%d;?\007', i)
+  end
+  vim.api.nvim_ui_send(table.concat(parts))
+  -- If the terminal never replies, don't leave highlight restoration disabled.
+  vim.defer_fn(function()
+    if stopped or id ~= query_id or not querying then return end
+    querying = false
+    if current then apply(current, true) end
+  end, 1000)
+end
+
+local function theme_notification(seq) return seq:match('^\027%[?997;[12]n$') or seq:match('^\027%[997;[12]n$') end
+
+local group = vim.api.nvim_create_augroup('TerminalPalette', { clear = true })
+debounce = assert(vim.uv.new_timer())
+reported = {}
+
 vim.api.nvim_create_autocmd('VimLeavePre', {
-  group = vim.api.nvim_create_augroup('MacosAppearance', {}),
+  group = group,
   once = true,
   callback = function()
     stopped = true
-    timer:stop()
-    timer:close()
-    if pending then pcall(pending.kill, pending, 9) end
-    pending = nil
+    debounce:stop()
+    debounce:close()
   end,
 })
 
-timer:start(2000, 2000, vim.schedule_wrap(refresh))
+vim.api.nvim_create_autocmd('TermResponse', {
+  group = group,
+  callback = function(ev)
+    local seq = ev.data.sequence
+    if theme_notification(seq) then
+      query()
+      return
+    end
+    local key, color = parse(seq)
+    if key == nil or not color then return end
+    reported[key] = color
+    schedule_apply()
+  end,
+})
 
-refresh()
+-- Neovim resets default highlights when 'background' changes. Reapply unless
+-- a palette query is already in flight and will apply the new colors.
+vim.api.nvim_create_autocmd('OptionSet', {
+  group = group,
+  pattern = 'background',
+  callback = function()
+    -- The background setter resets highlights before this runs, and a
+    -- synchronous reapply survives that reset. Deferring it leaves a frame
+    -- of default colors.
+    if stopped or querying or not current then return end
+    apply(current, true)
+  end,
+})
+
+vim.api.nvim_create_autocmd({ 'UIEnter', 'VimResume' }, {
+  group = group,
+  callback = query,
+})
+
+if #vim.api.nvim_list_uis() > 0 then query() end
