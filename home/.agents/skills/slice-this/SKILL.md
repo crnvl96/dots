@@ -1,5 +1,5 @@
 ---
-name: to-tickets
+name: slice-this
 description: Break a plan, spec, or the current conversation into a set of tracer-bullet tickets, each declaring its blocking edges.
 disable-model-invocation: true
 ---
@@ -14,9 +14,9 @@ Break a plan, spec, or conversation into a set of **tickets**: tracer-bullet ver
 
 Work from whatever is already in the conversation context. If the user passes a reference (a spec path, an issue number or URL) as an argument, fetch it and read its full body and comments.
 
-### 2. Explore the codebase (optional)
+### 2. Explore the codebase
 
-If you have not already explored the codebase, do so to understand the current state of the code.
+Explore the codebase to understand the current state of the code.
 
 Look for opportunities to prefactor the code to make the implementation easier. "Make the change easy, then make the easy change."
 
@@ -51,11 +51,6 @@ Iterate until the user approves the breakdown.
 
 ### 5. Publish the tickets to the configured tracker
 
-**Once, before start writing the tickets:**
-  - 
-  - Ask which is the parent spec of that ticket
+Invoke the skill `/inkdrop-fill-out-template` and write the ticket in the Inkdrop note supplied.
 
-**For each ticket, one at a time:**
-  - Invoke the skill `/inkdrop-fill-out-template` and write the ticket in the Inkdrop note supplied.
-
-In either form, avoid specific file paths or code snippets: they go stale fast. Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+Avoid specific file paths or code snippets: they go stale fast.
