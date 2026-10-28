@@ -10,7 +10,9 @@
   "showCacheMissNotices": true,
   "treeFilterMode": "no-tools",
   "defaultProjectTrust": "always",
-  "defaultTools": ["+codemode"],
+  "defaultTools": [
+    "+codemode"
+  ],
   "deviceId": "d2beeb27-8a3a-40ff-a9c5-4284ea70158c",
   "packages": [],
   "extensions": [],
@@ -19,8 +21,8 @@
   "enabledModels": [
     "openai/gpt-6-astra",
     "openai/gpt-6.1-sol",
-    "openai/gpt-5.6-luna",
-    "xai/grok-4.7"
+    "openai/gpt-6.1-terra",
+    "openai/gpt-6-luna"
   ],
   "defaultThinkingLevel": "high",
   "modelThinkingLevels": {
