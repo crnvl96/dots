@@ -7,6 +7,7 @@ return {
       diagnostics = {
         globals = {
           'vim',
+          'rex',
           'MiniPick',
           'MiniFiles',
           'MiniExtra',

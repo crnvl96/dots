@@ -102,3 +102,42 @@ require('render-markdown').setup({
 })
 
 vim.keymap.set('n', '<Leader>um', '<Cmd>lua require("render-markdown").toggle()<CR>', { desc = 'Toggle markdown UI' })
+
+-- Claude Code
+
+local toggle_key = '<C-,>'
+
+require('claudecode').setup({
+  terminal = {
+    snacks_win_opts = {
+      -- position = 'float',
+      -- width = 0.85,
+      -- height = 0.9,
+      -- border = 'single',
+      -- backdrop = 80,
+
+      position = 'bottom',
+      height = 0.4,
+      width = 1.0,
+      border = 'single',
+      backdrop = 80,
+
+      -- position = 'right',
+      -- width = 0.4,
+      -- height = 1.0,
+      -- border = 'rounded',
+
+      -- position = 'float',
+      -- width = 120, -- Fixed width in columns
+      -- height = 30, -- Fixed height in rows
+      -- border = 'double',
+      -- backdrop = 90,
+
+      keys = {
+        claude_hide = { toggle_key, function(self) self:hide() end, mode = 't', desc = 'Hide' },
+      },
+    },
+  },
+})
+
+vim.keymap.set({ 'n', 'x' }, toggle_key, '<cmd>ClaudeCodeFocus<cr>', { desc = 'Clauce Code' })

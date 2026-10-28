@@ -32,4 +32,6 @@ vim.pack.add({
   'https://github.com/saghen/blink.lib',
   'https://github.com/saghen/blink.cmp',
   'https://github.com/meanderingprogrammer/render-markdown.nvim',
+  'https://github.com/coder/claudecode.nvim',
+  'https://github.com/folke/snacks.nvim',
 })
