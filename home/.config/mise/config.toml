@@ -66,7 +66,8 @@ tilesize = 45.0 # Normal Dock icon size
 largesize = 16.0 # Magnified icon size; unused while magnification is off
 
 [bootstrap.macos.defaults.NSGlobalDomain]
-AppleInterfaceStyleSwitchesAutomatically = true # Automatically switch Light/Dark
+AppleInterfaceStyle = "Dark" # Use dark appearance by default
+AppleInterfaceStyleSwitchesAutomatically = false # Keep dark appearance instead of switching automatically
 
 [bootstrap.macos.defaults."com.apple.finder"]
 FXRemoveOldTrashItems = true # Permanently remove Trash items after 30 days

@@ -22,9 +22,9 @@ _template:
 * * *
 
 > # !Instructions
->
+> 
 > ## Planning Steps
->
+> 
 > 1. **Analyze the request** and restate requirements in clear terms.
 >    - Treat the agreed spec, or explicit user-approved requirements, as the scope boundary.
 >    - If investigation reveals a missing decision or requires a scope change, ask the user rather than silently changing requirements.
@@ -38,7 +38,7 @@ _template:
 > 4. **Identify dependencies** between components
 > 5. **Assess risks** and potential blockers
 > 6. **Estimate complexity** (High/Medium/Low)
->
+> 
 > ## Planning versus execution
 >
 > - When initially filling the plan, leave all implementation phases unchecked.
@@ -51,12 +51,12 @@ _template:
 > - The example below illustrates a plan updated during execution, not initial completion.
 >
 > ## Formatting
->
+> 
 > - **One fact per bullet.** Never pack several facts into one sentence separated by semicolons or parentheses. Split into sub-bullets instead.
 > - **Current State**: one `###` subsection per topic (a slice, a file, a call site, tests, consumers) if it gets long. Under the heading, a one-line scope (file path, branch, where it's staged), then flat bullets with `file:line` references. Nest only where a bullet branches (e.g. mobile vs desktop).
 > - **Decisions Needed**: a numbered list. Each item is a bold title and a one-line question, then each option as a task sub-item: bold name, "(Recommended)" on the one you'd pick, and a one-line summary. Nest one consideration per bullet under each option. Once the user settles a decision, check it (`1. [x]`), delete the other options, and drop the chosen option's checkbox.
 > - **Status**: each phase is a task with a one-line summary, then sub-bullets listing what was done, one change per bullet.
->
+> 
 
 
 ## Requirements Restatement

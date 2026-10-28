@@ -89,7 +89,7 @@ _template:
 > List concrete, verifiable outcomes required for this ticket to be complete.
 > Use plain bullets and replace the empty bullet below with the ticket's actual criteria.
 
--
+- 
 
 ## Blocked by
 
