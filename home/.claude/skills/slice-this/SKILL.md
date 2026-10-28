@@ -1,1 +1,0 @@
-../../../.agents/skills/slice-this/SKILL.md
