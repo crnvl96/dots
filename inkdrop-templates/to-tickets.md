@@ -62,7 +62,6 @@ _template:
 > - Use links for external specs, issues, and blocking tickets when available. Do not invent references.
 > - Apply the section instructions below to every ticket, not just the first.
 > - Replace placeholders with actual content. Do not copy instructions or examples into the populated note.
-
 # 1. [Ticket title]
 
 ## Parent

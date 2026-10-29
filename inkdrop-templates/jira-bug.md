@@ -37,7 +37,6 @@ _template:
 > - Use native Jira dependency edges for genuine blocking issues where supported.
 > - If the available tooling cannot set those edges, retain the blocking links and identify the manual step needed.
 > - Do not claim an issue was published or a dependency was set unless it actually happened.
-
 # Summary
 
 > # !Instructions
