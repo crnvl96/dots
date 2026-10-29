@@ -7,30 +7,23 @@ relative = true
 exclude = [".DS_Store", "node_modules", ".git"]
 
 [tasks.boot]
-description = "Set up the machine from the repo's mise config"
+description = "Set up runtime tools and dotfiles from the repo's mise config"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 raw = true
 run = "mise bootstrap"
 
 [tasks."boot:preview"]
-description = "Preview the machine setup without applying it"
+description = "Preview runtime tool and dotfile setup without applying it"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap --dry-run"
 
 [tasks."boot:status"]
-description = "Show the state of the configured machine setup"
+description = "Show the state of configured runtime tools and dotfiles"
 dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap status"
-
-[tasks."macos:restart-tools"]
-description = "Restart Dock, Finder, and the menu bar to reload preferences"
-dir = "{{ config_root }}"
-confirm = { message = "Restart Dock, Finder, and the menu bar?", default = "no" }
-raw = true
-run = "killall Dock Finder SystemUIServer"
 
 [tasks."repo:check"]
 description = "Format the Neovim configuration"
