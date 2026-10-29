@@ -1,1 +1,0 @@
-../../../.agents/skills/inkdrop-note-taking/SKILL.md
