@@ -12,7 +12,7 @@ notification_condition = "always"
 copy_on_select_clear_selection = true
 
 [tui.model_availability_nux]
-"gpt-6.1-sol" = 2
+"gpt-6.1-sol" = 4
 
 [projects."/Users/velozient/Documents/dotfiles"]
 trust_level = "trusted"

@@ -52,6 +52,8 @@ Each smell reads *what it is* → *how to fix*; match it against the diff:
 
 Issue both sub-agent calls together, in the foreground, and aggregate the reports they return.
 
+Spawn every sub-agent with a fresh context window, without inheriting the parent conversation history (`fork_turns="none"` when using `collaboration.spawn_agent`). Make each prompt self-contained with the relevant task context and resources listed below.
+
 **Standards sub-agent prompt** should include:
 
 - The full diff command and commit list.
