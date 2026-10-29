@@ -8,9 +8,11 @@ status_line_use_colors = true
 status_line = ["approval-mode", "model-with-reasoning", "current-dir", "git-branch", "pull-request-number", "branch-changes", "context-used", "five-hour-limit", "context-window-size", "weekly-limit"]
 terminal_title = ["activity", "thread-name"]
 auto_recap = false
+notification_condition = "always"
+copy_on_select_clear_selection = true
 
 [tui.model_availability_nux]
-"gpt-6.1-sol" = 1
+"gpt-6.1-sol" = 2
 
 [projects."/Users/velozient/Documents/dotfiles"]
 trust_level = "trusted"
