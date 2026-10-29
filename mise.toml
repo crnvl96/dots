@@ -25,12 +25,6 @@ dir = "{{ config_root }}"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 run = "mise bootstrap status"
 
-[tasks."pi:install-deps"]
-description = "Install Pi dependencies from the npm lockfile"
-dir = "{{ config_root }}/home/.pi"
-raw = true
-run = "npm ci"
-
 [tasks."macos:restart-tools"]
 description = "Restart Dock, Finder, and the menu bar to reload preferences"
 dir = "{{ config_root }}"
@@ -39,14 +33,10 @@ raw = true
 run = "killall Dock Finder SystemUIServer"
 
 [tasks."repo:check"]
-description = "Format the Neovim and Pi"
+description = "Format the Neovim configuration"
 dir = "{{ config_root }}"
 run = [
-  # format
   "(cd home/.config/nvim && stylua .)",
-  "(cd home/.pi && ./node_modules/.bin/oxfmt .)",
-  # lint
-  "(cd home/.pi && ./node_modules/.bin/oxlint .)",
 ]
 
 [tasks."skills:link"]

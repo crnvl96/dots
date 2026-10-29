@@ -20,7 +20,6 @@ node = "24"
 python = "3.14"
 bun = "1.4"
 rust = { version = "1.99", components = ["rust-analyzer", "rust-src"] }
-"npm:@earendil-works/pi-coding-agent" = "latest"
 "npm:skills" = "latest"
 "npm:agent-browser" = { version = "latest", postinstall = "agent-browser install" }
 "npm:oxfmt" = "latest"
