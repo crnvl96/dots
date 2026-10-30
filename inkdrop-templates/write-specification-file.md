@@ -3,15 +3,13 @@ _template:
   title: Implementation spec
   description: For turning the current conversation into a spec
 ---
-## Source / Related notes
-
 > # !Instructions
 >
-> Link the source ticket note and identify the ticket number and title when this spec covers a slice.
-> Treat that ticket's agreed deliverable and acceptance criteria as the scope boundary.
-> Link other relevant requests, discussion notes, specs, or issues when available.
-> For unsliced work sourced only from the conversation, summarize that context instead of inventing a reference.
-> Confirm any necessary scope change with the user before finalizing the spec.
+> Treat the agreed deliverable and acceptance criteria as the scope boundary.
+> Make this document complete and self-contained.
+> Summarize the context you have instead of inventing references.
+> De thorough and meticulous on your writing. This document alone must be enough to guide the complete implementation.
+> Confirm any necessary scope change with the user before finalizing this spec.
 
 ## Problem Statement
 
@@ -54,9 +52,33 @@ _template:
 > - API contracts
 > - Specific interactions
 >
-> Do NOT include specific file paths or code snippets. They may end up being outdated very quickly.
+> Do not include specific file paths or code snippets.
+
+
+## Implementation Phases
+
+### Phase 1:
+
+### Phase 2:
+
+> # !Instructions
 >
-> Exception: if a prototype produced a snippet that encodes a decision more precisely than prose can (state machine, reducer, schema, type shape), inline it within the relevant decision and note briefly that it came from a prototype. Trim to the decision-rich parts, not a working demo, just the important bits.
+> Example:
+>
+> ## Implementation Phases
+>
+> ### Phase 1: Merged wizard dialog component
+>
+> - **Action**: Build one `Dialog` with a `switch (step)` selecting content + actions for scanning/stats/notebook/progress (see the step union sketched below); merge the two old stylesheets under a new root class
+> - **Why**: A single dialog instance is required for the wizard; scanning and progress share one status-line renderer to minimize new UI surface
+> - **Verify**: Manually render each step in isolation and confirm its content and actions
+>
+> ### Phase 2: Reorder orchestration in index.tsx
+>
+> - **Action**: Replace the two `useModal()` calls with one (see the state shape sketched below); add `step`/`filePaths`/`totalSize`/`selectedBookId` state; call `openImportDialog()` first, open the dialog immediately at `scanning`, then transition through `stats` → `notebook` → `progress`
+> - **Why**: Implements "files first" — the wizard opens immediately and shows live scan progress
+> - **Verify**: `npm run dev`, trigger the import command, confirm the dialog opens before scanning and advances through all four steps
+> - **Dependencies**: Phase 1's wizard dialog component
 
 ## Testing Decisions
 
@@ -97,4 +119,5 @@ _template:
 
 > # !Instructions
 >
-> Any further notes about the feature.
+> Any further notes about the feature that aren't covered by any prior section.
+> You are free to add here any information that is relevant to ensure the correct implementation of this document.

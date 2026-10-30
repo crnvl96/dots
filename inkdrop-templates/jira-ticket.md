@@ -1,6 +1,6 @@
 ---
 _template:
-  title: Jira feature
+  title: Jira
   description: For preparing a Jira-ready feature ticket draft in Inkdrop
 ---
 > # !Instructions
