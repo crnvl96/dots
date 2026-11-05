@@ -11,6 +11,20 @@ local debounce, reported, current, applied
 local stopped = false
 local querying = false
 
+local function apply_transparency()
+  require('mini.colors').setup()
+  local cs = require('mini.colors').get_colorscheme()
+  cs:add_transparency({
+    float = true,
+    statuscolumn = true,
+    statusline = true,
+    tabline = true,
+    winbar = true,
+  }):apply()
+end
+
+apply_transparency()
+
 local function blend(fg, bg, alpha)
   local function channel(hex, i) return tonumber(hex:sub(i, i + 1), 16) end
   local function mix(i) return math.floor(alpha * channel(fg, i) + (1 - alpha) * channel(bg, i) + 0.5) end
@@ -126,15 +140,7 @@ local function apply(c, force)
   for group, spec in pairs(highlights(c)) do
     vim.api.nvim_set_hl(0, group, spec)
   end
-  require('mini.colors').setup()
-  local cs = require('mini.colors').get_colorscheme()
-  cs:add_transparency({
-    float = true,
-    statuscolumn = true,
-    statusline = true,
-    tabline = true,
-    winbar = true,
-  }):apply()
+  apply_transparency()
   vim.g.colors_name = nil
   applied = id
   current = c
