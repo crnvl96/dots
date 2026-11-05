@@ -1,0 +1,80 @@
+{
+  "version": 3,
+  "skills": {
+    "show-me": {
+      "source": "humanlayer/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/humanlayer/skills.git",
+      "skillPath": "plugins/show-me/skills/show-me/SKILL.md",
+      "skillFolderHash": "362200ac2fb3c17b765049444e88de73767e6d08",
+      "installedAt": "2026-10-29T15:05:01.335Z",
+      "updatedAt": "2026-10-29T15:05:01.335Z"
+    },
+    "fill-out-template": {
+      "source": "inkdropapp/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/inkdropapp/skills.git",
+      "skillPath": "skills/fill-out-template/SKILL.md",
+      "skillFolderHash": "73dc2a4ecf1f8b769c75de314eca35e6220cc5b0",
+      "installedAt": "2026-10-29T15:06:47.187Z",
+      "updatedAt": "2026-10-29T15:06:47.187Z"
+    },
+    "mermaid": {
+      "source": "inkdropapp/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/inkdropapp/skills.git",
+      "skillPath": "skills/mermaid/SKILL.md",
+      "skillFolderHash": "3e1cfd3734f3778d21a71801a26c0991cfe2b1ed",
+      "installedAt": "2026-10-29T15:06:47.188Z",
+      "updatedAt": "2026-10-29T15:06:47.188Z"
+    },
+    "note-taking": {
+      "source": "inkdropapp/skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/inkdropapp/skills.git",
+      "skillPath": "skills/note-taking/SKILL.md",
+      "skillFolderHash": "5429501f67165023523b7db102ff57be96230f1a",
+      "installedAt": "2026-10-29T15:06:47.189Z",
+      "updatedAt": "2026-10-29T15:06:47.189Z"
+    },
+    "humanizer": {
+      "source": "blader/humanizer",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/blader/humanizer.git",
+      "skillPath": "SKILL.md",
+      "skillFolderHash": "0ef9fe5bc3572734fd3ae6c448fe00a30cd5dcf0",
+      "pluginName": "humanizer",
+      "installedAt": "2026-10-29T17:32:52.355Z",
+      "updatedAt": "2026-10-29T17:32:52.355Z"
+    },
+    "hunk-review": {
+      "source": "modem-dev/hunk",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/modem-dev/hunk.git",
+      "skillPath": ".agents/skills/hunk-review/SKILL.md",
+      "skillFolderHash": "48ebdc86f8d7d4aea4e01379d65f2911b8b3c93f",
+      "installedAt": "2026-10-30T01:44:33.697Z",
+      "updatedAt": "2026-10-30T01:44:33.697Z"
+    }
+  },
+  "dismissed": {
+    "findSkillsPrompt": true
+  },
+  "lastSelectedAgents": [
+    "amp",
+    "cline",
+    "codex",
+    "cursor",
+    "droid",
+    "fx",
+    "gemini-cli",
+    "github-copilot",
+    "kilo",
+    "kimi-code-cli",
+    "opencode",
+    "pi",
+    "warp",
+    "zed",
+    "claude-code"
+  ]
+}
