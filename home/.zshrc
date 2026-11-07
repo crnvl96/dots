@@ -3,6 +3,11 @@
 
 export CONTAINERS_MACHINE_PROVIDER="libkrun"
 
+bindkey -e                        # Use Emacs line editing even when EDITOR/VISUAL points to nvim.
+autoload -Uz compinit && compinit # git completion
+
+eval "$(~/.local/bin/mise activate zsh)" # mise
+
 zed() {
   if (( $# == 0 )); then
     command zed zed://open
@@ -26,8 +31,44 @@ wt() {
   done
 }
 
-bindkey -e                        # Use Emacs line editing even when EDITOR/VISUAL points to nvim.
-autoload -Uz compinit && compinit # git completion
+# Minimal prompt: read only Git metadata, using zsh builtins throughout.
+_minimal_prompt_git() {
+  emulate -L zsh
+  local root=${PWD:A} gitdir head
 
-eval "$(~/.local/bin/mise activate zsh)" # mise
-eval "$(starship init zsh)"             # starship
+  # Reserve psvar[1:2] for the worktree and branch; %v displays names literally.
+  psvar[1]=''
+  psvar[2]=''
+
+  # Rediscover each time so git init/switch and nested repositories stay current.
+  while [[ ! -d $root/.git && ! -f $root/.git ]]; do
+    # Bare repositories and Git's administrative directories have no worktree.
+    [[ -f $root/HEAD && ( -d $root/objects || -f $root/commondir ) ]] && return 0
+    [[ $root == / ]] && return 0
+    root=${root:h}
+  done
+
+  gitdir=$root/.git
+  if [[ -f $gitdir ]]; then
+    # Linked worktrees and submodules point to their metadata with a gitfile.
+    { IFS= read -r gitdir < "$gitdir"; } 2>/dev/null || return 0
+    [[ $gitdir == 'gitdir: '?* ]] || return 0
+    gitdir=${gitdir#gitdir: }
+    [[ $gitdir == /* ]] || gitdir=$root/$gitdir
+  fi
+
+  { IFS= read -r head < "$gitdir/HEAD"; } 2>/dev/null || return 0
+  if [[ $head == 'ref: refs/heads/'?* ]]; then
+    psvar[2]=${head#ref: refs/heads/}
+  elif [[ ( ${#head} == 40 || ${#head} == 64 ) && $head != *[^0-9a-f]* ]]; then
+    psvar[2]="detached@${head[1,7]}"
+  else
+    return 0
+  fi
+  psvar[1]=${(V)root:t}
+}
+
+autoload -Uz add-zsh-hook
+add-zsh-hook precmd _minimal_prompt_git
+PROMPT='%F{cyan}%~%f %(1V.[%F{blue}%1v%f:%F{magenta}%2v%f] .)❯ '
+RPROMPT=''
