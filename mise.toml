@@ -45,27 +45,12 @@ mode = "symlink"
 relative = true
 
 [tasks.boot]
-description = "Set up runtime tools and dotfiles from the repo's mise config"
-dir = "{{ config_root }}"
+description = "Set up runtime tools and dotfiles"
 env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
 raw = true
 run = "mise bootstrap"
 
-[tasks."boot:preview"]
-description = "Preview runtime tool and dotfile setup without applying it"
-dir = "{{ config_root }}"
-env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
-run = "mise bootstrap --dry-run"
-
-[tasks."boot:status"]
-description = "Show the state of configured runtime tools and dotfiles"
-dir = "{{ config_root }}"
-env = { MISE_GLOBAL_CONFIG_FILE = "{{ config_root }}/home/.config/mise/config.toml" }
-run = "mise bootstrap status"
-
-[tasks."repo:check"]
+[tasks."repo:fmt"]
 description = "Format the Neovim configuration"
-dir = "{{ config_root }}"
-run = [
-  "(cd home/.config/nvim && stylua .)",
-]
+dir = "{{ config_root }}/home/.config/nvim"
+run = "stylua ."
