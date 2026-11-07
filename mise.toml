@@ -1,12 +1,23 @@
-[dotfiles."~"]
-source = "home"
+# Shared directories: link tracked files and preserve machine-local files.
+[dotfiles."~/.agents"]
+source = "home/.agents"
 mode = "symlink-each"
 manifest = "git"
 relative = true
 
-# These trees are linked as directories by the entries below.
-exclude = [".config/ghostty", ".config/mise", ".config/nvim", ".config/rex"]
+[dotfiles."~/.claude"]
+source = "home/.claude"
+mode = "symlink-each"
+manifest = "git"
+relative = true
 
+[dotfiles."~/.config/zed"]
+source = "home/.config/zed"
+mode = "symlink-each"
+manifest = "git"
+relative = true
+
+# Repo-owned directories: link each configuration tree as a whole.
 [dotfiles."~/.config/ghostty"]
 source = "home/.config/ghostty"
 mode = "symlink"
@@ -24,6 +35,12 @@ relative = true
 
 [dotfiles."~/.config/rex"]
 source = "home/.config/rex"
+mode = "symlink"
+relative = true
+
+# Standalone files.
+[dotfiles."~/.zshrc"]
+source = "home/.zshrc"
 mode = "symlink"
 relative = true
 
