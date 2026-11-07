@@ -47,15 +47,6 @@
       "installedAt": "2026-10-29T17:32:52.355Z",
       "updatedAt": "2026-10-29T17:32:52.355Z"
     },
-    "hunk-review": {
-      "source": "modem-dev/hunk",
-      "sourceType": "github",
-      "sourceUrl": "https://github.com/modem-dev/hunk.git",
-      "skillPath": ".agents/skills/hunk-review/SKILL.md",
-      "skillFolderHash": "48ebdc86f8d7d4aea4e01379d65f2911b8b3c93f",
-      "installedAt": "2026-10-30T01:44:33.697Z",
-      "updatedAt": "2026-10-30T01:44:33.697Z"
-    },
     "untangle-codebase": {
       "source": "caldoai/skills",
       "sourceType": "github",
@@ -65,6 +56,15 @@
       "pluginName": "untangle-codebase",
       "installedAt": "2026-11-06T12:09:59.891Z",
       "updatedAt": "2026-11-06T12:09:59.891Z"
+    },
+    "merge-risk": {
+      "source": "warpdotdev/common-skills",
+      "sourceType": "github",
+      "sourceUrl": "https://github.com/warpdotdev/common-skills.git",
+      "skillPath": ".agents/skills/merge-risk/SKILL.md",
+      "skillFolderHash": "5c76f952405b020e9a1c9acfa86bcee99645c953",
+      "installedAt": "2026-11-07T04:08:56.635Z",
+      "updatedAt": "2026-11-07T04:08:56.635Z"
     }
   },
   "dismissed": {
