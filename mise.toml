@@ -4,7 +4,28 @@ mode = "symlink-each"
 manifest = "git"
 relative = true
 
-exclude = [".DS_Store", "node_modules", ".git"]
+# These trees are linked as directories by the entries below.
+exclude = [".config/ghostty", ".config/mise", ".config/nvim", ".config/rex"]
+
+[dotfiles."~/.config/ghostty"]
+source = "home/.config/ghostty"
+mode = "symlink"
+relative = true
+
+[dotfiles."~/.config/mise"]
+source = "home/.config/mise"
+mode = "symlink"
+relative = true
+
+[dotfiles."~/.config/nvim"]
+source = "home/.config/nvim"
+mode = "symlink"
+relative = true
+
+[dotfiles."~/.config/rex"]
+source = "home/.config/rex"
+mode = "symlink"
+relative = true
 
 [tasks.boot]
 description = "Set up runtime tools and dotfiles from the repo's mise config"
