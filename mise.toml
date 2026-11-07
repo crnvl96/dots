@@ -31,8 +31,3 @@ dir = "{{ config_root }}"
 run = [
   "(cd home/.config/nvim && stylua .)",
 ]
-
-[tasks."skills:link"]
-description = "Symlink each tracked skill file from .agents into .claude"
-dir = "{{ config_root }}"
-file = "scripts/skills-link.sh"
